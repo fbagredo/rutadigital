@@ -18,7 +18,7 @@ import org.springframework.context.annotation.Bean;
 @ConditionalOnClass({Tracer.class, Propagator.class})
 public class WorkerTracingAutoConfiguration {
 
-    @Bean
+    @Bean("eventconductorTaskTracing")
     @ConditionalOnMissingBean(TaskTracing.class)
     public TaskTracing workerTaskTracing(ObjectProvider<Tracer> tracer, ObjectProvider<Propagator> propagator) {
         return new MicrometerTaskTracing(tracer::getIfAvailable, propagator::getIfAvailable);

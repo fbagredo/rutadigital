@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.23.1] - 2026-09-27
+
+### Fixed
+- **worker SDK: bean names no longer clash with an application's.** Every bean `worker-api`, `worker-kafka` and `worker-embedded` contribute is now namespaced (`eventconductorTaskDispatcher`, `eventconductorTaskRegistry`, `eventconductorWorkerReplySink`, `eventconductorCancelledTasks`, …) and backs off by type (`@ConditionalOnMissingBean(TaskDispatcher.class)` etc.). An application with its own bean called `taskDispatcher` failed to start with `BeanDefinitionOverrideException`.
+- **worker SDK: no global `ObjectMapper` bean.** `worker-api` registered a plain fallback `workerApiObjectMapper` that could become the application's mapper (no `java.time` support — dates stopped parsing) or compete with a library's ("expected single matching bean but found 2"). Variables are now bound with a mapper private to the SDK (JSR-310 enabled, unknown properties ignored), never an autowire candidate; `TaskDispatcher` has constructors without a mapper. Contract `date`/`datetime` attributes now bind to `LocalDate`/`LocalDateTime` and are written back as ISO strings.
+- **worker SDK: handler lookup by contract id, with or without version, and a stepId fallback that resolves.** Registrations are keyed `<id>@<version>`, so the stepId fallback could never match. Precedence is now: `taskId` `<id>@<version>` exactly (a version not served is never swapped for another); `taskId` `<id>` → highest registered version; and, only when the `taskId` is blank (an `ACTION` with no `task:`), the `stepId` matched the same way. See *Task contracts → How a worker finds the handler*.
+- **worker SDK: variables are typed by the contract, not by how they look.** A value was read as JSON whenever it parsed as JSON, so a `string` locator `12E45` arrived as `1.2E46`. The declared type of the input attribute now decides: textual types (`string`, `date`, `datetime`, enums, …) get the raw value; numbers, booleans, objects and arrays are read as JSON; no declared type (`Object`, a `Map<String, Object>` input) keeps the raw string. Variables the input does not declare are ignored instead of failing the binding.
+- **The definitions push webhook reloads task contracts too.** `POST /workflow/webhooks/{provider}` re-imported only `workflow.git-import` repositories; it now also re-imports the matching `tasks.git-import` repositories, **before** the workflows (a step's `task:` reference resolves at import). The signature is checked with `workflow.git-import.webhook-secret`, or `tasks.git-import.webhook-secret` when only that one is set.
+- **worker-kafka commits a task's offset only after its reply is published.** The consumer was reactive: handlers ran on another thread while the record's offset was committed as soon as it reached the `Flux`, so a crash between the commit and the reply lost the task. `consumeWorkerEvent` is now an imperative `Consumer<Message<DomainEvent>>`: the handler runs and its reply is published on the listener thread before it returns, and a refused reply is rethrown so the record is not committed (at-least-once). Parallelism comes from the binding's `consumer.concurrency`. Covered against an embedded broker.
+
 ## [2.23.0] - 2026-09-27
 
 ### Added

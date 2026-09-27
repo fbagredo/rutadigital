@@ -2,7 +2,10 @@ package io.mateu.workflow.infra.in.rest;
 
 import io.mateu.workflow.application.usecases.gitimport.ImportWorkflowDefinitionsFromGitUseCase;
 import io.mateu.workflow.application.usecases.gitimport.ImportWorkflowDefinitionsFromGitUseCase.ImportWorkflowDefinitionsResult;
+import io.mateu.workflow.application.usecases.taskcontractimport.ImportTasksFromDirectoryUseCase.ImportTasksResult;
+import io.mateu.workflow.application.usecases.taskcontractimport.ImportTasksFromGitUseCase;
 import io.mateu.workflow.infra.config.GitImportProperties;
+import io.mateu.workflow.infra.config.TaskContractGitImportProperties;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -27,8 +30,20 @@ class GitImportWebhookControllerTest {
 
     @Mock GitImportProperties properties;
     @Mock ImportWorkflowDefinitionsFromGitUseCase importUseCase;
+    @Mock TaskContractGitImportProperties taskProperties;
+    @Mock ImportTasksFromGitUseCase taskImportUseCase;
 
     GitImportWebhookController controller;
+
+    private static TaskContractGitImportProperties.GitRepository taskRepo(String url, String branch) {
+        var r = new TaskContractGitImportProperties.GitRepository();
+        r.setUrl(url);
+        r.setBranch(branch);
+        return r;
+    }
+
+    private final TaskContractGitImportProperties.GitRepository tasksMaster =
+            taskRepo("https://github.com/org/defs.git", "master");
 
     private static GitImportProperties.GitRepository repo(String url, String branch) {
         var r = new GitImportProperties.GitRepository();
@@ -42,8 +57,11 @@ class GitImportWebhookControllerTest {
 
     @BeforeEach
     void setUp() {
-        controller = new GitImportWebhookController(properties, importUseCase);
+        controller = new GitImportWebhookController(properties, importUseCase, taskProperties, taskImportUseCase);
         lenient().when(properties.getWebhookSecret()).thenReturn(null);
+        lenient().when(taskProperties.getRepositories()).thenReturn(List.of());
+        lenient().when(taskImportUseCase.handle(anyList()))
+                .thenReturn(new ImportTasksResult(List.of(), List.of()));
         lenient().when(properties.getRepositories()).thenReturn(List.of(master));
         lenient().when(importUseCase.handle(anyList()))
                 .thenReturn(new ImportWorkflowDefinitionsResult(List.of(), List.of(), List.of()));
@@ -106,5 +124,47 @@ class GitImportWebhookControllerTest {
                 .isInstanceOf(ResponseStatusException.class)
                 .hasFieldOrPropertyWithValue("statusCode", HttpStatus.UNAUTHORIZED);
         verify(importUseCase, after(300).never()).handle(any());
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void reloads_the_task_contracts_too_and_before_the_workflows() {
+        when(taskProperties.getRepositories()).thenReturn(List.of(tasksMaster,
+                taskRepo("https://github.com/org/other-tasks.git", "master")));
+
+        controller.webhook("github", new HttpHeaders(), githubPush("master", "https://github.com/org/defs.git"));
+
+        var order = inOrder(taskImportUseCase, importUseCase);
+        ArgumentCaptor<List<TaskContractGitImportProperties.GitRepository>> tasks = ArgumentCaptor.forClass(List.class);
+        order.verify(taskImportUseCase, timeout(2000)).handle(tasks.capture());
+        order.verify(importUseCase, timeout(2000)).handle(anyList());
+        assertThat(tasks.getValue()).containsExactly(tasksMaster);
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void a_push_to_a_task_contracts_only_repository_reloads_just_the_contracts() {
+        var tasksOnly = taskRepo("https://github.com/org/task-defs.git", "main");
+        when(taskProperties.getRepositories()).thenReturn(List.of(tasksOnly));
+
+        var response = controller.webhook("github", new HttpHeaders(),
+                githubPush("main", "https://github.com/org/task-defs.git"));
+
+        assertThat(response.getBody()).doesNotContain("ignored");
+        ArgumentCaptor<List<TaskContractGitImportProperties.GitRepository>> tasks = ArgumentCaptor.forClass(List.class);
+        verify(taskImportUseCase, timeout(2000)).handle(tasks.capture());
+        assertThat(tasks.getValue()).containsExactly(tasksOnly);
+        verify(importUseCase, after(400).never()).handle(any());
+    }
+
+    @Test
+    void with_only_task_contract_repositories_configured_it_still_reloads_them() {
+        when(properties.getRepositories()).thenReturn(List.of());
+        when(taskProperties.getRepositories()).thenReturn(List.of(tasksMaster));
+
+        controller.webhook("github", new HttpHeaders(), "not a json body".getBytes(StandardCharsets.UTF_8));
+
+        verify(taskImportUseCase, timeout(2000)).handle(List.of(tasksMaster));
+        verify(importUseCase, after(400).never()).handle(any());
     }
 }

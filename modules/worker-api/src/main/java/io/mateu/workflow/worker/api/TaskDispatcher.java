@@ -23,7 +23,10 @@ import java.util.List;
  *   <li>{@link ReplyNotAcceptedException} from the sink → propagated, so the caller can have the
  *       task redelivered rather than lost.</li>
  * </ul>
- * Cancellation is claimed before starting and again before replying (decision: a cancellation that
+ * Handler lookup follows {@link TaskRegistry}'s precedence (taskId, then stepId when the taskId is
+ * blank); variables are typed by the input's declared types (see {@code VariableBinding}).
+ *
+ * <p>Cancellation is claimed before starting and again before replying (decision: a cancellation that
  * overtakes or races the task still stops it); the handler can also poll it via the context.
  */
 public final class TaskDispatcher {
@@ -37,6 +40,17 @@ public final class TaskDispatcher {
     private final boolean strict;
     private final TaskTracing tracing;
 
+    /** A dispatcher binding variables with the SDK's own mapper (see {@code VariableBinding}). */
+    public TaskDispatcher(TaskRegistry registry, TaskReplySink sink, Cancellations cancellations,
+                          boolean strict, TaskTracing tracing) {
+        this(registry, sink, cancellations, null, strict, tracing);
+    }
+
+    /**
+     * @param mapper the mapper to bind variables with; null (recommended) for the SDK's own, which
+     *               reads {@code java.time} types and ignores variables the input does not declare.
+     *               The application's {@code ObjectMapper} bean is deliberately not used.
+     */
     public TaskDispatcher(TaskRegistry registry, TaskReplySink sink, Cancellations cancellations,
                           ObjectMapper mapper, boolean strict) {
         this(registry, sink, cancellations, mapper, strict, TaskTracing.NOOP);

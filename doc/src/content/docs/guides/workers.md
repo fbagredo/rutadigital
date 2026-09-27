@@ -88,6 +88,38 @@ The host decides the transport; the handler does not change:
 
 `worker-api`, which the generated code depends on, never puts Spring Cloud Stream on your classpath. The in-repo `modules/sample-worker` is a full Kafka example, and `examples/greetings-tasks` is the minimal task module.
 
+### What the runtime adds to your application
+
+- **Beans, namespaced and backing off.** Every bean the SDK contributes has an `eventconductor…`
+  name — `eventconductorTaskRegistry`, `eventconductorTaskDispatcher`, `eventconductorWorkerReplySink`,
+  `eventconductorWorkerCancellations`, `eventconductorCancelledTasks`, `eventconductorTaskTracing`
+  (Kafka), and `eventconductorEmbeddedReplySink`, `eventconductorEmbeddedCancellations`,
+  `eventconductorEmbeddedTaskExecutor` (embedded) — so your own `taskDispatcher` or `taskRegistry`
+  never clashes with them. Each backs off (`@ConditionalOnMissingBean` by type) when you define a
+  bean of the same type, e.g. your own `TaskDispatcher`. The Kafka binding function keeps its name,
+  `consumeWorkerEvent`.
+- **No `ObjectMapper` bean.** Variables are bound with a Jackson mapper private to the SDK
+  (JSR-310 enabled, unknown properties ignored). Your application's JSON configuration neither
+  affects task binding nor is affected by having the SDK on the classpath.
+- **Handler lookup** is by contract reference, with or without version, falling back to the step id
+  only for an `ACTION` with no `task:` — see
+  [how a worker finds the handler](/reference/task-contracts/#how-a-worker-finds-the-handler).
+- **Typing** follows the contract's declared input types, not what a value looks like — a
+  `string` attribute holding `12E45` arrives as `"12E45"` — see
+  [binding variables](/reference/task-contracts/#binding-variables).
+- **Commit semantics (Kafka): at least once.** The handler runs, and its reply is published
+  synchronously, on the listener thread; the binder commits the task's offset only after that
+  returns. A crash before the reply is out leaves the offset uncommitted and the task is
+  redelivered — handlers must be idempotent. A reply the broker still refuses after the runtime's
+  own retries is rethrown, so the binder retries it (`max-attempts`) and then applies its error
+  handling; set `enable-dlq` on the `consumeWorkerEvent-in-0` binding if a task must survive a
+  prolonged broker outage. Tasks run one at a time per consumer thread: raise
+  `spring.cloud.stream.bindings.consumeWorkerEvent-in-0.consumer.concurrency` (up to the task
+  topic's partition count) for parallelism, and keep a handler under the consumer's
+  `max.poll.interval.ms` (5 minutes by default) — use an [asynchronous worker](#asynchronous-workers)
+  for longer work. A cancellation is honoured mid-task only when it is consumed by another thread,
+  so in-flight cancellation also needs a concurrency above one.
+
 ## The low-level worker protocol
 
 Everything above is built on the protocol below. Use it directly when you are not generating from a contract, or to understand what the runtime does on your behalf.
