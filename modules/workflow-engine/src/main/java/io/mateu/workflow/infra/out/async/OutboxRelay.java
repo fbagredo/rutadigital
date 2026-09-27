@@ -180,7 +180,7 @@ public class OutboxRelay {
     private void relay(io.mateu.workflow.ddd.DomainEvent event) {
         if (event instanceof io.mateu.workflow.dtos.events.integration.ExternalEventRequested external) {
             // A PUBLISH_EVENT: out to its destination's topic, never to the engine's own.
-            ExternalEventSender.send(streamBridge, eventDestinations, external);
+            ExternalEventSender.send(streamBridge, eventDestinations, external, currentTrace());
             return;
         }
         if (sharedMessages && messageRouter.isEnabled()
@@ -188,7 +188,16 @@ public class OutboxRelay {
             messageRouter.route(message);
             return;
         }
-        PartitionedEvents.send(streamBridge, bindingFor(event), event);
+        PartitionedEvents.send(streamBridge, bindingFor(event), event, currentTrace());
+    }
+
+    /**
+     * The trace the relay is publishing in — {@link OutboxDrain} runs each delivery as a
+     * continuation of the row's own context — for the record's headers. Null when nothing is traced.
+     */
+    private io.mateu.workflow.dtos.TraceContext currentTrace() {
+        var tracing = outboxDrain.workflowTracing;
+        return tracing == null ? null : tracing.currentTraceContext();
     }
 
     /** See {@link RelayDestination} — where a relayed event goes, and why anything leaves `outbox`. */

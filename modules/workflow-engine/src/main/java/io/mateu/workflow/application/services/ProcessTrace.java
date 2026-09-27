@@ -1,11 +1,20 @@
 package io.mateu.workflow.application.services;
 
+import io.mateu.workflow.application.out.ProcessTraceContextRepository;
+import io.mateu.workflow.application.out.WorkflowTracing;
+import io.mateu.workflow.dtos.TraceContext;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.ObjectProvider;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
+import java.util.Collections;
+import java.util.LinkedHashMap;
+import java.util.Map;
 
 /**
  * The trace a process belongs to, derived from its id.
@@ -26,8 +35,22 @@ import java.security.NoSuchAlgorithmException;
  * <p>The anchor itself is a phantom: no span is ever emitted with its id. It exists to give the
  * process's own span a parent to inherit a trace id from, and a backend renders a span whose parent
  * is absent as the root of its trace, which is exactly what the process span is.
+ *
+ * <h2>Joining the caller's trace</h2>
+ *
+ * <p>A process started from inside somebody else's trace — a booking a CRS sent, whose trace
+ * already holds the CRS, the connector and the broker hop — should not start a trace of its own:
+ * the point of tracing it is to read the booking end to end. So a process created with a W3C
+ * context (Kafka record headers or the {@code traceContext} of {@code ProcessCreationRequested})
+ * keeps that context, and its anchor is the caller's span instead of the phantom: the same
+ * everything-descends-from-one-parent shape, one level further up. Unlike the derived anchor it is
+ * stored — {@link ProcessTraceContextRepository}, one row per such process — which is what keeps it
+ * as durable as the derived one: any pod, any time, reads the same row. Looked up once per process
+ * per pod and cached, and only while something is being traced; a process started with no context
+ * keeps the derived anchor.
  */
 @Service
+@Slf4j
 public class ProcessTrace {
 
     /** The version field of a W3C traceparent; "00" is the only one defined. */
@@ -55,9 +78,101 @@ public class ProcessTrace {
      */
     private final long idUpperBound;
 
+    private final WorkflowTracing workflowTracing;
+    private final ProcessTraceContextRepository contexts;
+
+    /**
+     * Per pod, which processes joined a caller's trace and which did not — the negative answer too,
+     * since that is nearly every process and asking the database on every step-over would be the
+     * cost this is meant not to have. Bounded LRU: a process out of it is simply asked for again.
+     */
+    private final Map<String, TraceContext> cache;
+
+    /** Marks "looked up, has none" in {@link #cache}. */
+    private static final TraceContext NONE = new TraceContext("none", null, null);
+
+    /** Derived anchors only, no store: what tests and a host with no persistence of its own use. */
+    public ProcessTrace(double samplingProbability) {
+        this(samplingProbability, WorkflowTracing.NOOP, null, 0);
+    }
+
+    @Autowired
     public ProcessTrace(
-            @Value("${management.tracing.sampling.probability:0.1}") double samplingProbability) {
+            @Value("${management.tracing.sampling.probability:0.1}") double samplingProbability,
+            ObjectProvider<WorkflowTracing> workflowTracing,
+            ObjectProvider<ProcessTraceContextRepository> contexts,
+            @Value("${workflow.tracing.process-context-cache-size:10000}") int cacheSize) {
+        this(samplingProbability, workflowTracing.getIfAvailable(() -> WorkflowTracing.NOOP),
+                contexts.getIfAvailable(), cacheSize);
+    }
+
+    public ProcessTrace(double samplingProbability, WorkflowTracing workflowTracing,
+                        ProcessTraceContextRepository contexts, int cacheSize) {
         this.idUpperBound = idUpperBoundFor(samplingProbability);
+        this.workflowTracing = workflowTracing == null ? WorkflowTracing.NOOP : workflowTracing;
+        this.contexts = contexts;
+        var bound = Math.max(cacheSize, 0);
+        this.cache = Collections.synchronizedMap(new LinkedHashMap<>(16, 0.75f, true) {
+            @Override
+            protected boolean removeEldestEntry(Map.Entry<String, TraceContext> eldest) {
+                return size() > bound;
+            }
+        });
+    }
+
+    /**
+     * The whole context every span of this process descends from: the caller's, when the process
+     * joined one at creation, else the derived anchor with no extras. Null when there is no process.
+     */
+    public TraceContext contextFor(String processId) {
+        if (processId == null || processId.isBlank()) {
+            return null;
+        }
+        var joined = joinedContext(processId);
+        return joined != null ? joined : TraceContext.of(derivedAnchorFor(processId));
+    }
+
+    /**
+     * Records that {@code processId} joined {@code context}'s trace — persisted, and cached on this
+     * pod so the step-over its creation triggers does not have to read it back. A null or invalid
+     * context, or tracing being off, records nothing.
+     */
+    public void join(String processId, TraceContext context) {
+        if (processId == null || context == null || contexts == null || !workflowTracing.enabled()) {
+            return;
+        }
+        contexts.save(processId, context);
+        cache.put(processId, context);
+    }
+
+    /** Forgets deleted processes, so their ids cannot resurface with a stale context. */
+    public void forget(java.util.Collection<String> processIds) {
+        if (processIds == null) {
+            return;
+        }
+        processIds.forEach(cache::remove);
+        if (contexts != null) {
+            contexts.deleteAllByProcessId(processIds);
+        }
+    }
+
+    private TraceContext joinedContext(String processId) {
+        // Zero-cost when off: no store, or nothing being traced, means no lookup at all.
+        if (contexts == null || !workflowTracing.enabled()) {
+            return null;
+        }
+        var cached = cache.get(processId);
+        if (cached == null) {
+            try {
+                cached = contexts.findByProcessId(processId).orElse(NONE);
+            } catch (RuntimeException e) {
+                // A tracing lookup must never be a workflow failure: fall back to the derived anchor.
+                log.debug("Could not read the trace context of process {}", processId, e);
+                return null;
+            }
+            cache.put(processId, cached);
+        }
+        return cached == NONE ? null : cached;
     }
 
     /**
@@ -76,15 +191,24 @@ public class ProcessTrace {
     }
 
     /**
-     * The phantom parent every span of this process descends from, as a W3C {@code traceparent},
-     * or {@code null} when there is no process to derive one from.
+     * The parent every span of this process descends from, as a W3C {@code traceparent}: the
+     * caller's span when the process joined a caller's trace (see the class comment), otherwise the
+     * phantom derived by {@link #derivedAnchorFor}. {@code null} when there is no process.
+     */
+    public String anchorFor(String processId) {
+        var context = contextFor(processId);
+        return context == null ? null : context.traceparent();
+    }
+
+    /**
+     * The phantom anchor derived from the process id alone, whatever the process joined.
      *
      * <p>SHA-256 of the process id, split into the 16-byte trace id and the 8-byte span id. A hash
      * rather than the raw id because a trace id is exactly 16 bytes and a process id is a UUID
      * string, and because it spreads ids that share a prefix. The sampled flag is the ratio
      * decision described on {@link #idUpperBound}.
      */
-    public String anchorFor(String processId) {
+    public String derivedAnchorFor(String processId) {
         if (processId == null || processId.isBlank()) {
             return null;
         }

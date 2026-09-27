@@ -32,10 +32,12 @@ public class StartStepExecutionUseCase {
         // nothing connects to anything. Not an extra read — dispatch() used to do this one.
         var stepExecution = stepExecutionRepository.findById(command.stepExecutionId()).orElseThrow();
         workflowTracing.continuing(
-                processTrace.anchorFor(stepExecution.getProcessId()),
+                processTrace.contextFor(stepExecution.getProcessId()),
                 "eventconductor.dispatch-step",
                 java.util.Map.of("eventconductor.process.id", String.valueOf(stepExecution.getProcessId()),
-                        "eventconductor.step.executionId", command.stepExecutionId()),
+                        "eventconductor.step.executionId", command.stepExecutionId(),
+                        "eventconductor.step.id", String.valueOf(stepExecution.getStepId()),
+                        "eventconductor.workflow.id", String.valueOf(stepExecution.getWorkflowDefinitionId())),
                 () -> dispatch(command, stepExecution));
     }
 

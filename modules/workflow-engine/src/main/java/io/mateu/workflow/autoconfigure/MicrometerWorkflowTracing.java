@@ -1,6 +1,7 @@
 package io.mateu.workflow.autoconfigure;
 
 import io.mateu.workflow.application.out.WorkflowTracing;
+import io.mateu.workflow.dtos.TraceContext;
 import io.micrometer.tracing.Span;
 import io.micrometer.tracing.Tracer;
 import io.micrometer.tracing.propagation.Propagator;
@@ -42,6 +43,14 @@ public class MicrometerWorkflowTracing implements WorkflowTracing {
     private volatile Tracer resolvedTracer;
     private volatile Propagator resolvedPropagator;
 
+    /**
+     * The {@code tracestate} and {@code baggage} of the context the current work continues, for
+     * {@link #currentTraceContext()}. Held here rather than recovered from the span because the
+     * outgoing {@code traceparent} is always the current span's, while these two are the caller's,
+     * passed through untouched — and Micrometer's span context has no portable place for either.
+     */
+    private static final ThreadLocal<TraceContext> CONTINUED = new ThreadLocal<>();
+
     /** Eager: the beans are already in hand (tests, and the case where wiring order happens to work). */
     public MicrometerWorkflowTracing(Tracer tracer, Propagator propagator) {
         this.tracerSupplier = () -> tracer;
@@ -77,6 +86,58 @@ public class MicrometerWorkflowTracing implements WorkflowTracing {
             }
         }
         return p;
+    }
+
+    @Override
+    public boolean enabled() {
+        return tracer() != null;
+    }
+
+    @Override
+    public TraceContext currentTraceContext() {
+        var traceParent = currentTraceParent();
+        if (traceParent == null) {
+            return null;
+        }
+        var continued = CONTINUED.get();
+        return continued == null
+                ? TraceContext.of(traceParent)
+                : TraceContext.of(traceParent, continued.tracestate(), continued.baggage());
+    }
+
+    @Override
+    public void continuing(TraceContext context, String spanName, Map<String, String> tags, Runnable work) {
+        if (context == null) {
+            continuing((String) null, spanName, tags, work);
+            return;
+        }
+        var previous = CONTINUED.get();
+        CONTINUED.set(context);
+        try {
+            continuing(context.traceparent(), spanName, tags, work);
+        } finally {
+            if (previous == null) {
+                CONTINUED.remove();
+            } else {
+                CONTINUED.set(previous);
+            }
+        }
+    }
+
+    @Override
+    public void tagCurrentSpan(String key, String value) {
+        var tracer = tracer();
+        if (tracer == null || key == null || value == null) {
+            return;
+        }
+        try {
+            var span = tracer.currentSpan();
+            if (span != null) {
+                span.tag(key, value);
+            }
+        } catch (RuntimeException e) {
+            log.debug("Could not tag the current span with '{}'", key, e);
+        }
     }
 
     @Override

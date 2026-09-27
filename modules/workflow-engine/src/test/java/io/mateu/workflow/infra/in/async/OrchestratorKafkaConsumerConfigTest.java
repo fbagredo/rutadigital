@@ -89,7 +89,7 @@ class OrchestratorKafkaConsumerConfigTest {
                 event("A", "a0"), event("B", "b0"), event("A", "a1"),
                 event("C", "c0"), event("B", "b1"), event("A", "a2"));
 
-        config(4).consumeUpstream().accept(batch);
+        config(4).consumeUpstream().accept(org.springframework.messaging.support.MessageBuilder.withPayload(batch).build());
 
         // The invariant: within each process, the engine saw the events in arrival order.
         assertThat(seenByProcess.get("A")).containsExactly("a0", "a1", "a2");
@@ -115,7 +115,7 @@ class OrchestratorKafkaConsumerConfigTest {
             return null;
         }).when(upstream).handle(any());
 
-        config(2).consumeUpstream().accept(List.of(event("A", "a0"), event("B", "b0")));
+        config(2).consumeUpstream().accept(org.springframework.messaging.support.MessageBuilder.withPayload(List.of(event("A", "a0"), event("B", "b0"))).build());
 
         assertThat(aProceeded.getCount()).as("A only proceeds once B has run on another thread").isZero();
     }
@@ -130,7 +130,7 @@ class OrchestratorKafkaConsumerConfigTest {
             return null;
         }).when(upstream).handle(any());
 
-        assertThatThrownBy(() -> config(4).consumeUpstream().accept(List.of(event("A", "a0"), event("B", "b0"))))
+        assertThatThrownBy(() -> config(4).consumeUpstream().accept(org.springframework.messaging.support.MessageBuilder.withPayload(List.of(event("A", "a0"), event("B", "b0"))).build()))
                 .isInstanceOf(RecoverableDataAccessException.class);
         // A retryable failure never parks: the binder redelivers and idempotent handlers redo the rest.
         verify(deadLetters, never()).park(any(), any(), any());
@@ -149,7 +149,7 @@ class OrchestratorKafkaConsumerConfigTest {
         }).when(upstream).handle(any());
 
         var poison = event("A", "a0");
-        assertThatCode(() -> config(4).consumeUpstream().accept(List.of(poison, event("B", "b0"))))
+        assertThatCode(() -> config(4).consumeUpstream().accept(org.springframework.messaging.support.MessageBuilder.withPayload(List.of(poison, event("B", "b0"))).build()))
                 .doesNotThrowAnyException();
 
         verify(deadLetters).park(eq(poison), any(IllegalStateException.class), eq("upstream"));
@@ -164,7 +164,7 @@ class OrchestratorKafkaConsumerConfigTest {
             return null;
         }).when(upstream).handle(any());
 
-        config(1).consumeUpstream().accept(List.of(event("A", "a0"), event("A", "a1"), event("B", "b0")));
+        config(1).consumeUpstream().accept(org.springframework.messaging.support.MessageBuilder.withPayload(List.of(event("A", "a0"), event("A", "a1"), event("B", "b0"))).build());
 
         verify(upstream, times(3)).handle(any());
         assertThat(seen).containsExactly("a0", "a1", "b0");

@@ -35,6 +35,15 @@ public class CreateProcessUseCase {
     // ObjectProvider, like NotifyParentStepService: the step-update pipeline reaches process
     // creation, so a direct dependency would close an injection cycle.
     final ObjectProvider<UpdateStepExecutionUseCase> updateStepExecutionUseCase;
+    final ObjectProvider<io.mateu.workflow.application.services.ProcessTrace> processTrace;
+
+    /**
+     * Whether a process created with a caller's W3C trace context joins that trace. On by default:
+     * it changes nothing for a caller that sends no context, and a caller that sends one is asking
+     * for exactly this. Off, every process keeps the trace derived from its id, as before.
+     */
+    @org.springframework.beans.factory.annotation.Value("${workflow.tracing.join-caller-trace:true}")
+    boolean joinCallerTrace = true;
 
     /**
      * Fallback timeout, in milliseconds, for ACTION and RULE steps that declare none. Zero — the
@@ -159,6 +168,15 @@ public class CreateProcessUseCase {
                     workflowDefinition.id(), process.getId());
         }
         processRepository.save(process);
+
+        // Joined before anything reads the process's anchor: the step-over this creation triggers
+        // must continue the caller's trace, not the derived one.
+        if (joinCallerTrace && command.traceContext() != null && processTrace != null) {
+            var trace = processTrace.getIfAvailable();
+            if (trace != null) {
+                trace.join(process.getId(), command.traceContext());
+            }
+        }
 
         workflowMetrics.processStarted(command.workflowDefinitionId());
 

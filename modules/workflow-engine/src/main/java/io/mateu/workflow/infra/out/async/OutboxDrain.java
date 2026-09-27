@@ -297,7 +297,7 @@ public class OutboxDrain {
                 // relay pass that happens to be draining it. Without this the send belongs to
                 // no trace at all and the consumer on the other side starts a fresh one, so a
                 // process reads as a series of unrelated traces rather than one.
-                workflowTracing.continuing(message.getTraceParent(), "outbox relay",
+                workflowTracing.continuing(message.traceContext(), "outbox relay", java.util.Map.of(),
                         () -> deliver.accept(delivery.payload()));
                 sent.add(message);
             } catch (Exception e) {

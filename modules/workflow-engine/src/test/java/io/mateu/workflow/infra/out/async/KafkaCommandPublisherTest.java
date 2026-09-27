@@ -27,6 +27,7 @@ import static org.mockito.Mockito.when;
 class KafkaCommandPublisherTest {
 
     @Mock StreamBridge streamBridge;
+    @Mock io.mateu.workflow.application.out.WorkflowTracing workflowTracing;
     @Mock ProcessIndexRepository processIndexRepository;
 
     @InjectMocks KafkaCommandPublisher publisher;

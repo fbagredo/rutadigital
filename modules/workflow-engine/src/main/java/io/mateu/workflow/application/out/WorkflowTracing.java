@@ -1,5 +1,7 @@
 package io.mateu.workflow.application.out;
 
+import io.mateu.workflow.dtos.TraceContext;
+
 import java.time.Instant;
 import java.util.Map;
 import java.util.function.Supplier;
@@ -30,6 +32,34 @@ public interface WorkflowTracing {
      */
     default String currentTraceParent() {
         return null;
+    }
+
+    /**
+     * Whether anything is being traced at all. False for the no-op, and for the Micrometer bridge
+     * until a tracer exists — which is what lets the engine skip the work of carrying a caller's
+     * context (storing it, looking it up) when there is nothing to hand it to.
+     */
+    default boolean enabled() {
+        return false;
+    }
+
+    /**
+     * The current trace as a whole W3C context: the current span as {@code traceparent}, plus the
+     * {@code tracestate} and {@code baggage} of the process being worked on, when it carries any.
+     * Null when nothing is being traced. This is what goes onto an outbox row and onto the headers of
+     * every message the engine publishes.
+     */
+    default TraceContext currentTraceContext() {
+        return TraceContext.of(currentTraceParent());
+    }
+
+    /**
+     * {@link #continuing(String, String, Map, Runnable)} from a whole W3C context, so the work — and
+     * everything it publishes — also carries the context's {@code tracestate} and {@code baggage}.
+     * A null context runs the work as it is.
+     */
+    default void continuing(TraceContext context, String spanName, Map<String, String> tags, Runnable work) {
+        continuing(context == null ? null : context.traceparent(), spanName, tags, work);
     }
 
     /**
@@ -74,6 +104,14 @@ public interface WorkflowTracing {
     /** {@link #continuing(String, String, Runnable)} with tags on the span it opens. */
     default void continuing(String traceParent, String spanName, Map<String, String> tags, Runnable work) {
         continuing(traceParent, spanName, work);
+    }
+
+    /**
+     * Adds an attribute to the span the current work runs in — for what is only known once the work
+     * has started, like the definition a step-over turned out to belong to, or what it decided.
+     * Nothing when no span is current; a null value is left off.
+     */
+    default void tagCurrentSpan(String key, String value) {
     }
 
     /** Names a piece of engine work, so a trace shows what the engine was doing and for how long. */

@@ -79,6 +79,18 @@
             <scope>test</scope>
         </dependency>
 
+        <!-- A real OpenTelemetry tracer behind the Micrometer bridge, for the trace-context
+             propagation tests: a W3C context in, the same trace out on every published header. -->
+        <dependency>
+            <groupId>io.micrometer</groupId>
+            <artifactId>micrometer-tracing-bridge-otel</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>io.opentelemetry</groupId>
+            <artifactId>opentelemetry-sdk-testing</artifactId>
+            <scope>test</scope>
+        </dependency>
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-test</artifactId>

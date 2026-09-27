@@ -35,17 +35,38 @@ public final class TaskDispatcher {
     private final Cancellations cancellations;
     private final VariableBinding binding;
     private final boolean strict;
+    private final TaskTracing tracing;
 
     public TaskDispatcher(TaskRegistry registry, TaskReplySink sink, Cancellations cancellations,
                           ObjectMapper mapper, boolean strict) {
+        this(registry, sink, cancellations, mapper, strict, TaskTracing.NOOP);
+    }
+
+    public TaskDispatcher(TaskRegistry registry, TaskReplySink sink, Cancellations cancellations,
+                          ObjectMapper mapper, boolean strict, TaskTracing tracing) {
         this.registry = registry;
         this.sink = sink;
         this.cancellations = cancellations == null ? Cancellations.NONE : cancellations;
         this.binding = new VariableBinding(mapper);
         this.strict = strict;
+        this.tracing = tracing == null ? TaskTracing.NOOP : tracing;
     }
 
     public void dispatch(TaskExecutionRequested task) {
+        dispatch(task, null);
+    }
+
+    /**
+     * {@link #dispatch(TaskExecutionRequested)} inside the trace the engine dispatched the task in:
+     * the handler and its reply run as a child of the engine's span (see {@link TaskTracing}).
+     *
+     * @param traceContext the W3C context from the task's transport headers; null when there is none
+     */
+    public void dispatch(TaskExecutionRequested task, io.mateu.workflow.dtos.TraceContext traceContext) {
+        tracing.run(task, traceContext, () -> run(task, traceContext));
+    }
+
+    private void run(TaskExecutionRequested task, io.mateu.workflow.dtos.TraceContext traceContext) {
         var registration = registry.resolve(task.taskId(), task.stepId());
         if (registration == null) {
             var which = task.taskId() != null && !task.taskId().isBlank()
@@ -74,7 +95,7 @@ public final class TaskDispatcher {
 
         Object output;
         try {
-            output = invoke(registration, input, contextFor(task));
+            output = invoke(registration, input, contextFor(task, traceContext));
         } catch (TaskFailure failure) {
             sink.failed(task, List.of(), failure.reason());
             return;
@@ -106,8 +127,12 @@ public final class TaskDispatcher {
         return ((TaskHandler<Object, Object>) registration.handler()).handle(input, context);
     }
 
-    private TaskContext contextFor(TaskExecutionRequested task) {
+    private TaskContext contextFor(TaskExecutionRequested task, io.mateu.workflow.dtos.TraceContext traceContext) {
         return new TaskContext() {
+            public io.mateu.workflow.dtos.TraceContext traceContext() {
+                return traceContext;
+            }
+
             public String taskExecutionId() {
                 return task.taskExecutionId();
             }

@@ -1,6 +1,8 @@
 package io.mateu.workflow.infra.out.async;
 
 import io.mateu.workflow.ddd.DomainEvent;
+import io.mateu.workflow.dtos.TraceContext;
+import org.springframework.messaging.Message;
 import org.springframework.cloud.stream.function.StreamBridge;
 import org.springframework.kafka.support.KafkaHeaders;
 import org.springframework.messaging.support.MessageBuilder;
@@ -44,15 +46,51 @@ import java.nio.charset.StandardCharsets;
 final class PartitionedEvents {
 
     static void send(StreamBridge streamBridge, String binding, DomainEvent event) {
+        send(streamBridge, binding, event, null);
+    }
+
+    /**
+     * {@link #send(StreamBridge, String, DomainEvent)} carrying {@code trace} as the record's W3C
+     * {@code traceparent}/{@code tracestate}/{@code baggage} headers, so whoever consumes it — a
+     * worker, the engine's own next hop, another shard — continues the same trace. Null sends no
+     * trace headers, which is exactly the message this sent before.
+     */
+    static void send(StreamBridge streamBridge, String binding, DomainEvent event, TraceContext trace) {
         var key = event.partitionKey();
-        var accepted = (key == null || key.isBlank())
-                ? streamBridge.send(binding, event)
-                : streamBridge.send(binding, MessageBuilder.withPayload(event)
-                        .setHeader(KafkaHeaders.KEY, key.getBytes(StandardCharsets.UTF_8))
-                        .build());
+        var keyed = key != null && !key.isBlank();
+        boolean accepted;
+        if (!keyed && trace == null) {
+            accepted = streamBridge.send(binding, event);
+        } else {
+            var builder = MessageBuilder.withPayload(event);
+            if (keyed) {
+                builder.setHeader(KafkaHeaders.KEY, key.getBytes(StandardCharsets.UTF_8));
+            }
+            withTraceHeaders(builder, trace);
+            accepted = streamBridge.send(binding, builder.build());
+        }
         if (!accepted) {
             throw new EventPublicationRefusedException(binding, event);
         }
+    }
+
+    /**
+     * Puts {@code trace} on a message as W3C headers. As bytes, deliberately: the Kafka binder's
+     * header mapper writes a {@code String} header as JSON — quoted — and a {@code traceparent} in
+     * quotes is one no OpenTelemetry or Micrometer propagator on the other side will read. Bytes go
+     * onto the record exactly as given.
+     */
+    static <T> MessageBuilder<T> withTraceHeaders(MessageBuilder<T> builder, TraceContext trace) {
+        if (trace != null) {
+            trace.toHeaders().forEach((name, value) ->
+                    builder.setHeader(name, value.getBytes(StandardCharsets.UTF_8)));
+        }
+        return builder;
+    }
+
+    /** {@link #withTraceHeaders(MessageBuilder, TraceContext)} for an already built message. */
+    static <T> Message<T> withTraceHeaders(Message<T> message, TraceContext trace) {
+        return trace == null ? message : withTraceHeaders(MessageBuilder.fromMessage(message), trace).build();
     }
 
     /**

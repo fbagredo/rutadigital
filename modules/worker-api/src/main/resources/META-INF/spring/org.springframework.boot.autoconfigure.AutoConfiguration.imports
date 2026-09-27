@@ -1,1 +1,2 @@
 io.mateu.workflow.worker.api.WorkerApiAutoConfiguration
+io.mateu.workflow.worker.api.WorkerTracingAutoConfiguration
