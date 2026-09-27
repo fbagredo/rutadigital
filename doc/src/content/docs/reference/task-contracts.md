@@ -66,6 +66,20 @@ left as written), so a definition never changes contract without an edit. It the
 `<id>@<version>` as the `taskId`, and defaults the step's topic from the contract. See
 [versioning](/reference/versioning/) for how pinned versions and in-flight processes coexist.
 
+### How a worker finds the handler
+
+The Java runtime resolves a dispatched task in this order:
+
+1. **`taskId` with a version** (`greet@2`) — exactly that registration. A version the worker does
+   not serve resolves to nothing (a warning, or `ERROR` with `eventconductor.worker.strict=true`);
+   it is never swapped for another version, whose input or output may differ.
+2. **`taskId` without a version** (`greet`) — the highest version the worker registers for that id.
+3. **`stepId`, only when the `taskId` is blank** — an `ACTION` with no `task:` reference. The step
+   id is matched like a `taskId`: `<id>@<version>` exactly, otherwise as a contract id (highest
+   version). So a step `id: greet` with no `task:` is served by the `greet` handler.
+
+A `taskId` that is set but not served never falls back to the `stepId`.
+
 ## The wire protocol
 
 A worker communicates with the engine through three integration events. In Kafka mode they travel
@@ -104,10 +118,21 @@ case — the payloads are the same.
 
 ### Binding variables
 
-`variables` are name/value **string** pairs. A value that parses as JSON is read as that JSON
-shape (so `integer`, `number`, `boolean`, `object` and `array` round-trip); anything else is kept
-as a plain string (so a `string` or a `date` stays itself). Output values are written back the
-same way — strings as-is, everything else as JSON.
+`variables` are name/value **string** pairs, and a task receives every process variable, not only
+its contract's inputs. How a value is read is decided by the **declared type** of the input
+attribute it binds to — never by what the value looks like:
+
+| Declared type | Value bound as |
+|---|---|
+| `string`, `date`, `datetime` (Java `String`, `LocalDate`, `LocalDateTime`, enums, `UUID`, …) | the raw string, unchanged — a locator `12E45` or a code `007` stays itself |
+| `integer`, `number`, `boolean`, `object`, `array` (numbers, booleans, `JsonNode`, lists, maps, records) | read as JSON; a value that is not JSON is passed as a string and coerced (or reported as a binding error) |
+| no declared type (an `Object` component, a `Map<String, Object>` input) | the raw string |
+
+Variables the input does not declare are ignored. Output values are written back as strings
+as-is, and everything else as JSON (`java.time` values as ISO-8601 strings).
+
+The Java runtime binds with a Jackson mapper private to the SDK (JSR-310 enabled, unknown
+properties ignored). It does not use, and does not register, an application `ObjectMapper` bean.
 
 ### Reliability
 

@@ -4,7 +4,6 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
 import io.mateu.workflow.application.out.EmbeddedTaskExecutor;
 import io.mateu.workflow.application.usecases.stepexecution.update.UpdateStepExecutionCommand;
 import io.mateu.workflow.application.usecases.stepexecution.update.UpdateStepExecutionUseCase;
@@ -34,7 +33,7 @@ class EmbeddedTaskExecutorTest {
         var registry = new TaskRegistry(List.of(
                 new TaskRegistration<>("place-order", 1, "t", In.class, Out.class, handler)));
         var dispatcher = config.taskDispatcher(registry, sink, config.embeddedCancellations(),
-                new ObjectMapper(), new WorkerProperties());
+                new WorkerProperties());
         return config.dispatchingTaskExecutor(dispatcher);
     }
 

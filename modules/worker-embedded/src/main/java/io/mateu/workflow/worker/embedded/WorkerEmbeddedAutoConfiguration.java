@@ -1,12 +1,12 @@
 package io.mateu.workflow.worker.embedded;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
 import io.mateu.workflow.application.out.EmbeddedTaskExecutor;
 import io.mateu.workflow.application.usecases.stepexecution.update.UpdateStepExecutionUseCase;
 import io.mateu.workflow.worker.api.Cancellations;
 import io.mateu.workflow.worker.api.TaskDispatcher;
 import io.mateu.workflow.worker.api.TaskRegistry;
 import io.mateu.workflow.worker.api.TaskReplySink;
+import io.mateu.workflow.worker.api.TaskTracing;
 import io.mateu.workflow.worker.api.TransactionAwareReplySink;
 import io.mateu.workflow.worker.api.WorkerApiAutoConfiguration;
 import io.mateu.workflow.worker.api.WorkerProperties;
@@ -33,27 +33,30 @@ import org.springframework.context.annotation.Bean;
 @ConditionalOnProperty(name = "workflow.mode", havingValue = "embedded", matchIfMissing = true)
 public class WorkerEmbeddedAutoConfiguration {
 
-    @Bean
+    @Bean("eventconductorEmbeddedReplySink")
     @ConditionalOnMissingBean(TaskReplySink.class)
     public TaskReplySink embeddedReplySink(UpdateStepExecutionUseCase updateStepExecution) {
         return new TransactionAwareReplySink(new UpdateStepExecutionSink(updateStepExecution));
     }
 
-    @Bean
+    @Bean("eventconductorEmbeddedCancellations")
     @ConditionalOnMissingBean(Cancellations.class)
     public Cancellations embeddedCancellations() {
         return Cancellations.NONE;
     }
 
-    @Bean
-    @ConditionalOnMissingBean
+    /**
+     * Namespaced bean name, and backs off for any {@link TaskDispatcher} the application defines: an
+     * application bean called {@code taskDispatcher} of its own type must not clash with this one.
+     */
+    @Bean("eventconductorTaskDispatcher")
+    @ConditionalOnMissingBean(TaskDispatcher.class)
     public TaskDispatcher taskDispatcher(TaskRegistry registry, TaskReplySink sink,
-                                         Cancellations cancellations, ObjectMapper objectMapper,
-                                         WorkerProperties properties) {
-        return new TaskDispatcher(registry, sink, cancellations, objectMapper, properties.isStrict());
+                                         Cancellations cancellations, WorkerProperties properties) {
+        return new TaskDispatcher(registry, sink, cancellations, properties.isStrict(), TaskTracing.NOOP);
     }
 
-    @Bean
+    @Bean("eventconductorEmbeddedTaskExecutor")
     @ConditionalOnMissingBean(EmbeddedTaskExecutor.class)
     public EmbeddedTaskExecutor dispatchingTaskExecutor(TaskDispatcher dispatcher) {
         return dispatcher::dispatch;
