@@ -158,7 +158,7 @@ class ImportWorkflowDefinitionsFromDirectoryTest {
         write(dir, "one.yml.ec", "one");
         write(dir, "two.yml.ec", "two");
         useCase.handle(List.of(dir.toString()));
-        assertThat(registry.idsFor("workflow", dir.toRealPath().toString())).containsExactlyInAnyOrder("one", "two");
+        assertThat(registry.idsFor("workflow", dir.toAbsolutePath().normalize().toString())).containsExactlyInAnyOrder("one", "two");
 
         Files.delete(dir.resolve("two.yml.ec"));
         var gone = new WorkflowDefinition("two", "two", 1, null, false, 0, false, null, 0, List.of());
@@ -218,7 +218,7 @@ class ImportWorkflowDefinitionsFromDirectoryTest {
 
         // Pruning is what an unreconcilable id cost: the import used to track explicit ids only,
         // so a file with none could never be recognised as gone.
-        assertThat(registry.idsFor("workflow", dir.toRealPath().toString())).containsExactly("nameless");
+        assertThat(registry.idsFor("workflow", dir.toAbsolutePath().normalize().toString())).containsExactly("nameless");
 
         Files.delete(dir.resolve("nameless.ec"));
         when(repository.findById("nameless")).thenReturn(Optional.of(
