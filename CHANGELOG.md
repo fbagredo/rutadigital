@@ -15,7 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The workflow definitions listing and the task contracts listing show a long description on one line, cut at a word with "…"; the whole description opens under the row when it is clicked.
 
 ### Fixed
-- LOCK/UNLOCK steps and `processLock` failed on PostgreSQL at the first acquire: the lock row id joined the lock name and key with a NUL, which PostgreSQL refuses in any text value. The id is now `<name length>:<name>:<key>` (e.g. `7:booking:MRU01/ABC123`) — printable and still unambiguous whatever the name or key contain. Migration `V34` widens `process_lock.id` to 520; a lock an H2 database held under the old id is rewritten at startup, so it keeps excluding across the upgrade. Now covered on PostgreSQL by the distributed suite (DIST-30).
+- LOCK/UNLOCK steps and `processLock` failed on PostgreSQL at the first acquire: the lock row id joined the lock name and key with a NUL, which PostgreSQL refuses in any text value. The id is now `<name length>:<name>:<key>` (e.g. `7:booking:MRU01/ABC123`) — printable and still unambiguous whatever the name or key contain. Migration `V34` widens `process_lock.id` to 520; a lock an H2 database held under the old id is rewritten before the first lock operation, so it keeps excluding across the upgrade. Now covered on PostgreSQL by the distributed suite (DIST-30).
 
 ## [2.22.1] - 2026-09-25
 

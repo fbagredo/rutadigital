@@ -5,8 +5,6 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
-import org.springframework.boot.context.event.ApplicationReadyEvent;
-import org.springframework.context.event.EventListener;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.jdbc.core.ConnectionCallback;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -63,31 +61,51 @@ public class JdbcLockService implements LockService {
         return LockRowId.of(lockName, lockKey);
     }
 
+    /** Set once the legacy-id rewrite has run successfully; see {@link #migrateLegacyRowIds()}. */
+    private volatile boolean legacyIdsChecked;
+
     /**
      * Rewrites the ids of rows written by the old NUL-joined encoding, so a lock held across the
      * upgrade is still found (and still excludes) under the new one. Only H2 can hold such rows —
      * PostgreSQL rejected every one of those inserts — and a held lock is short-lived, so this is
-     * normally a no-op scan of a near-empty table. Run once the context is up, when {@code ddl-auto}
-     * has certainly created the table; a failure is logged, never fatal.
+     * normally a no-op scan of a near-empty table.
+     *
+     * <p>Runs lazily, before the first lock operation of this instance, not at startup: a boot must
+     * never wait on the database (DIST-08 boots a pod with PostgreSQL paused). Until it succeeds it is
+     * retried on the next operation; a failure is logged, never thrown.
      */
-    @EventListener(ApplicationReadyEvent.class)
     public void migrateLegacyRowIds() {
-        try {
-            var rows = jdbcTemplate.query("SELECT id, lock_name, lock_key FROM process_lock",
-                    (rs, i) -> new String[]{rs.getString(1), rs.getString(2), rs.getString(3)});
-            int rewritten = 0;
-            for (String[] row : rows) {
-                if (LockRowId.isLegacy(row[0])) {
-                    rewritten += jdbcTemplate.update("UPDATE process_lock SET id = ? WHERE id = ?",
-                            rowId(row[1], row[2]), row[0]);
-                }
-            }
-            if (rewritten > 0) {
-                log.info("Rewrote {} process_lock id(s) from the NUL-separated encoding", rewritten);
-            }
-        } catch (RuntimeException e) {
-            log.warn("Could not check process_lock for legacy ids: {}", e.getMessage());
+        if (legacyIdsChecked) {
+            return;
         }
+        synchronized (this) {
+            if (legacyIdsChecked) {
+                return;
+            }
+            try {
+                rewriteLegacyRowIds();
+                legacyIdsChecked = true;
+            } catch (RuntimeException e) {
+                log.warn("Could not check process_lock for legacy ids: {}", e.getMessage());
+            }
+        }
+    }
+
+    /** The rewrite itself, unguarded; returns how many rows it rewrote. */
+    public int rewriteLegacyRowIds() {
+        var rows = jdbcTemplate.query("SELECT id, lock_name, lock_key FROM process_lock",
+                (rs, i) -> new String[]{rs.getString(1), rs.getString(2), rs.getString(3)});
+        int rewritten = 0;
+        for (String[] row : rows) {
+            if (LockRowId.isLegacy(row[0])) {
+                rewritten += jdbcTemplate.update("UPDATE process_lock SET id = ? WHERE id = ?",
+                        rowId(row[1], row[2]), row[0]);
+            }
+        }
+        if (rewritten > 0) {
+            log.info("Rewrote {} process_lock id(s) from the NUL-separated encoding", rewritten);
+        }
+        return rewritten;
     }
 
     private Timestamp newLease() {
@@ -96,12 +114,14 @@ public class JdbcLockService implements LockService {
 
     @Override
     public Outcome acquire(String lockName, String lockKey, String processId, String stepExecutionId) {
+        migrateLegacyRowIds();
         return transactionTemplate.execute(status ->
                 acquireInTx(lockName, lockKey, processId, stepExecutionId, false, true));
     }
 
     @Override
     public Outcome tryAcquire(String lockName, String lockKey, String processId) {
+        migrateLegacyRowIds();
         return transactionTemplate.execute(status ->
                 acquireInTx(lockName, lockKey, processId, null, false, false));
     }
@@ -140,11 +160,13 @@ public class JdbcLockService implements LockService {
 
     @Override
     public Optional<Grant> release(String lockName, String lockKey, String processId) {
+        migrateLegacyRowIds();
         return transactionTemplate.execute(status -> releaseInTx(lockName, lockKey, processId));
     }
 
     @Override
     public List<Grant> releaseAll(String processId) {
+        migrateLegacyRowIds();
         return transactionTemplate.execute(status -> {
             List<String[]> held = jdbcTemplate.query(
                     "SELECT lock_name, lock_key FROM process_lock WHERE holder_process_id = ?",
@@ -170,6 +192,7 @@ public class JdbcLockService implements LockService {
 
     @Override
     public List<Grant> expireLeases(LocalDateTime now) {
+        migrateLegacyRowIds();
         return transactionTemplate.execute(status -> {
             var expired = jdbcTemplate.query(
                     "SELECT lock_name, lock_key FROM process_lock "

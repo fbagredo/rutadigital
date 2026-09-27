@@ -92,7 +92,8 @@ class LockServiceJpaE2eTest extends AbstractJpaE2eTest {
                 "legacy\u0000L-1", "legacy", "L-1", "old-holder",
                 Timestamp.valueOf(LocalDateTime.now()), Timestamp.valueOf(LocalDateTime.now().plusHours(1)));
 
-        ((JdbcLockService) locks).migrateLegacyRowIds();
+        // What each instance runs once before its first lock operation.
+        assertThat(((JdbcLockService) locks).rewriteLegacyRowIds()).isEqualTo(1);
 
         assertThat(jdbc.queryForList("SELECT id FROM process_lock WHERE lock_name = 'legacy'", String.class))
                 .containsExactly(LockRowId.of("legacy", "L-1"));

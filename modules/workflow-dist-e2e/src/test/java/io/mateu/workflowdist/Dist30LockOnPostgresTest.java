@@ -1,5 +1,6 @@
 package io.mateu.workflowdist;
 
+import io.mateu.workflow.application.usecases.directoryimport.ImportWorkflowDefinitionsFromDirectoryUseCase;
 import io.mateu.workflow.dtos.Variable;
 import io.mateu.workflow.dtos.events.integration.TaskExecutionRequested;
 import io.mateu.workflowdist.support.AbstractDistTest;
@@ -11,6 +12,7 @@ import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.springframework.context.ConfigurableApplicationContext;
 
+import java.nio.file.Files;
 import java.time.Duration;
 import java.util.List;
 import java.util.Map;
@@ -30,9 +32,19 @@ class Dist30LockOnPostgresTest extends AbstractDistTest {
     static ConfigurableApplicationContext pod;
 
     @BeforeAll
-    static void startPods() {
+    static void startPods() throws Exception {
         DistInfra.ensureWorkerStarted();
         pod = DistInfra.startOrchestrator(Map.of());
+        // Imported here rather than dropped under workflows/: every classpath definition costs every
+        // pod's boot a database round trip, and DIST-08 times a boot with the database paused.
+        var dir = Files.createTempDirectory("dist30");
+        for (var name : List.of("dist-lock.json", "dist-process-lock.json")) {
+            try (var in = Dist30LockOnPostgresTest.class.getResourceAsStream("/dist30/" + name)) {
+                Files.copy(in, dir.resolve(name));
+            }
+        }
+        var result = pod.getBean(ImportWorkflowDefinitionsFromDirectoryUseCase.class).handle(List.of(dir.toString()));
+        assertThat(result.errors()).isEmpty();
     }
 
     @AfterAll
