@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [2.23.1] - 2026-09-27
+## [2.23.1] - 2026-09-28
 
 ### Fixed
 - **worker SDK: bean names no longer clash with an application's.** Every bean `worker-api`, `worker-kafka` and `worker-embedded` contribute is now namespaced (`eventconductorTaskDispatcher`, `eventconductorTaskRegistry`, `eventconductorWorkerReplySink`, `eventconductorCancelledTasks`, …) and backs off by type (`@ConditionalOnMissingBean(TaskDispatcher.class)` etc.). An application with its own bean called `taskDispatcher` failed to start with `BeanDefinitionOverrideException`.
