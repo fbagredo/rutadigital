@@ -58,12 +58,23 @@ public class ProcessesPage {
     }
 
     /**
+     * The id cell of a process, wherever it is on the page.
+     *
+     * <p>Keyed on {@code data-uuid}, not on the text: Mateu (since 3.0-alpha.365) draws a UUID cell
+     * as its last block — "…-3be632fdb9fe" — and keeps the whole UUID in the span's
+     * {@code data-uuid} and tooltip. The full id is therefore not text on the page any more.
+     */
+    public Locator idCell(String processId) {
+        return page.locator("[data-uuid=\"" + processId + "\"]").first();
+    }
+
+    /**
      * Opens a process by its id, which is what the grid renders as the link into the detail. The
      * other cells are plain text and clicking them does nothing — the same thing an operator finds
      * out by trying.
      */
     public ProcessDetailPage open(String processId) {
-        grid().getByText(processId, new Locator.GetByTextOptions().setExact(true)).first().click();
+        grid().locator("[data-uuid=\"" + processId + "\"]").first().click();
         var detail = new ProcessDetailPage(page);
         detail.awaitLoaded();
         return detail;
