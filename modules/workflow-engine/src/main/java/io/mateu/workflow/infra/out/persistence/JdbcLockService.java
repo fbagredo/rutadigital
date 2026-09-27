@@ -5,6 +5,8 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
+import org.springframework.boot.context.event.ApplicationReadyEvent;
+import org.springframework.context.event.EventListener;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.jdbc.core.ConnectionCallback;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -29,8 +31,9 @@ import java.util.UUID;
  * earliest waiter (if any) is promoted to holder in the same transaction, so no window exists where
  * the lock is free but a waiter is still queued behind it.
  *
- * <p>The composite key is materialised into a single {@code id} column
- * ({@code lockName + '\0' + lockKey}) so the mutex is a plain primary key and {@code FOR UPDATE} is
+ * <p>The composite key is materialised into a single {@code id} column ({@link LockRowId}:
+ * {@code <name length>:<lockName>:<lockKey>}, printable so PostgreSQL accepts it) so the mutex is a
+ * plain primary key and {@code FOR UPDATE} is
  * a by-id lookup. The first acquirer of a fresh key races on that INSERT; the loser catches the
  * duplicate-key and retries the {@code FOR UPDATE} path once, by which point the winner's row is
  * visible and it enqueues.
@@ -45,8 +48,6 @@ import java.util.UUID;
 @Slf4j
 public class JdbcLockService implements LockService {
 
-    private static final char SEP = '\u0000';
-
     final JdbcTemplate jdbcTemplate;
     final TransactionTemplate transactionTemplate;
 
@@ -59,7 +60,34 @@ public class JdbcLockService implements LockService {
     long leaseMs;
 
     private static String rowId(String lockName, String lockKey) {
-        return lockName + SEP + lockKey;
+        return LockRowId.of(lockName, lockKey);
+    }
+
+    /**
+     * Rewrites the ids of rows written by the old NUL-joined encoding, so a lock held across the
+     * upgrade is still found (and still excludes) under the new one. Only H2 can hold such rows —
+     * PostgreSQL rejected every one of those inserts — and a held lock is short-lived, so this is
+     * normally a no-op scan of a near-empty table. Run once the context is up, when {@code ddl-auto}
+     * has certainly created the table; a failure is logged, never fatal.
+     */
+    @EventListener(ApplicationReadyEvent.class)
+    public void migrateLegacyRowIds() {
+        try {
+            var rows = jdbcTemplate.query("SELECT id, lock_name, lock_key FROM process_lock",
+                    (rs, i) -> new String[]{rs.getString(1), rs.getString(2), rs.getString(3)});
+            int rewritten = 0;
+            for (String[] row : rows) {
+                if (LockRowId.isLegacy(row[0])) {
+                    rewritten += jdbcTemplate.update("UPDATE process_lock SET id = ? WHERE id = ?",
+                            rowId(row[1], row[2]), row[0]);
+                }
+            }
+            if (rewritten > 0) {
+                log.info("Rewrote {} process_lock id(s) from the NUL-separated encoding", rewritten);
+            }
+        } catch (RuntimeException e) {
+            log.warn("Could not check process_lock for legacy ids: {}", e.getMessage());
+        }
     }
 
     private Timestamp newLease() {

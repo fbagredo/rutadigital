@@ -15,7 +15,7 @@ import java.time.LocalDateTime;
 /**
  * The held half of a named per-key lock: one row per {@code (lockName, lockKey)} that is currently
  * owned. Its primary key <b>is</b> the mutex — the composite key is materialised into {@link #id}
- * ({@code lockName + '\0' + lockKey}) so a would-be second holder simply fails the insert.
+ * ({@link LockRowId}: {@code <name length>:<lockName>:<lockKey>}) so a would-be second holder simply fails the insert.
  *
  * <p>Declared as an entity so {@code ddl-auto} creates the table for the embedded path and every
  * test harness; the same shape is created by Flyway {@code V29} for deployments that run migrations
@@ -35,9 +35,12 @@ import java.time.LocalDateTime;
 @AllArgsConstructor
 public class ProcessLockEntity {
 
-    /** {@code lockName + '\0' + lockKey}. Long enough for a name plus a business key. */
+    /**
+     * {@link LockRowId#of}: {@code <name length>:<lockName>:<lockKey>}. 520 fits the longest pair the
+     * two 255-wide columns allow (3 + 1 + 255 + 1 + 255 = 515).
+     */
     @Id
-    @Column(length = 512)
+    @Column(length = 520)
     private String id;
 
     private String lockName;

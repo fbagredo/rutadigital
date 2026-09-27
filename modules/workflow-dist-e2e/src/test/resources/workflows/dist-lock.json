@@ -1,0 +1,12 @@
+{
+  "id": "dist-lock",
+  "name": "Distributed: LOCK / work / UNLOCK on a business key",
+  "version": 1,
+  "steps": [
+    { "id": "start", "type": "START", "name": "Start" },
+    { "id": "lock", "type": "LOCK", "name": "Take booking lock", "lockName": "booking", "lockKey": "bookingId", "preconditionStepId": "start" },
+    { "id": "work", "type": "ACTION", "name": "Touch the booking", "topic": "work", "preconditionStepId": "lock" },
+    { "id": "unlock", "type": "UNLOCK", "name": "Release booking lock", "lockName": "booking", "lockKey": "bookingId", "preconditionStepId": "work" },
+    { "id": "end", "type": "END", "name": "End", "preconditionStepId": "unlock" }
+  ]
+}
