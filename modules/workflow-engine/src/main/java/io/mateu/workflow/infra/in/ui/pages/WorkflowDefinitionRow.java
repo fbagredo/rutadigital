@@ -1,5 +1,6 @@
 package io.mateu.workflow.infra.in.ui.pages;
 
+import io.mateu.uidl.annotations.Details;
 import io.mateu.uidl.data.Status;
 import io.mateu.uidl.data.StatusType;
 import io.mateu.uidl.interfaces.Identifiable;
@@ -13,8 +14,17 @@ import io.mateu.workflow.domain.aggregates.WorkflowStatus;
  * concurrency limits, cron expression, step counts, required scopes and roles, two separate status
  * fields — for a page whose job is to let you find a definition and open it. Everything dropped is
  * still on the detail view, which is where a person goes to read it.
+ *
+ * <p>The description is the one column that could still take the row over: it is prose, and a
+ * paragraph of it made every row three or four lines tall. The column carries it cut to one line
+ * ({@link OneLine}); the whole of it is the row's {@link Details}, which is not a column but what
+ * opens under the row when it is clicked.
+ *
+ * @param description the description on one line, cut at a word with "…" when it is longer.
+ * @param fullDescription the description as written — the row detail.
  */
-public record WorkflowDefinitionRow(String id, String name, String description, Status status)
+public record WorkflowDefinitionRow(String id, String name, String description, Status status,
+                                    @Details String fullDescription)
         implements Identifiable {
 
     /**
@@ -28,7 +38,7 @@ public record WorkflowDefinitionRow(String id, String name, String description, 
      */
     public static WorkflowDefinitionRow of(WorkflowDefinition definition) {
         return new WorkflowDefinitionRow(definition.id(), definition.name(),
-                definition.description(), statusOf(definition));
+                OneLine.of(definition.description()), statusOf(definition), definition.description());
     }
 
     private static Status statusOf(WorkflowDefinition definition) {

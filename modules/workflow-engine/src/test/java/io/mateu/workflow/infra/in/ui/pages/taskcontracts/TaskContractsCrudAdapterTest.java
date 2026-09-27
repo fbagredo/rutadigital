@@ -40,6 +40,22 @@ class TaskContractsCrudAdapterTest {
     }
 
     @Test
+    void a_long_description_is_one_line_in_the_column_and_whole_in_the_row_detail() {
+        var text = "Charges the guest's card for the stay, retrying a soft decline twice before it "
+                + "gives up and tells the front desk.";
+        var adapter = new TaskContractsCrudAdapter(repo(List.of(new TaskContract("charge", 3, "billing",
+                null, text, Map.of(), Map.of(), List.of()))), definitions);
+
+        var row = adapter.search(null, null, page(), null).page().content().get(0);
+
+        assertThat(row.description()).endsWith("…").hasSizeLessThanOrEqualTo(71);
+        assertThat(row.fullDescription()).isEqualTo(text);
+        // the search looks at the whole description, not at the part the column shows
+        assertThat(adapter.search("front desk", null, page(), null).page().content())
+                .extracting(TaskContractRow::id).containsExactly("charge@3");
+    }
+
+    @Test
     void filters_by_group() {
         var rows = adapter.search(null, new TaskContractFilters("billing"), page(), null).page().content();
         assertThat(rows).extracting(TaskContractRow::id).containsExactly("charge@2");
