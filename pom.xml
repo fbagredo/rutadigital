@@ -61,7 +61,7 @@
   </modules>
 
   <properties>
-    <mateu.version>3.0-alpha.362</mateu.version>
+    <mateu.version>3.0-alpha.368</mateu.version>
     <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
     <java.version>21</java.version>
     <!-- Per-module line-coverage floor, overridden in each module's own pom. A floor,

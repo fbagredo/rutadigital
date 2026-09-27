@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- Mateu 3.0-alpha.362 → 3.0-alpha.368 (the engine UI and every app). Brings listing row details (`@Details`), UUID cells shortened to their last block, and Vaadin/Redwood layout fixes.
+- The workflow definitions listing and the task contracts listing show a long description on one line, cut at a word with "…"; the whole description opens under the row when it is clicked.
+
 ## [2.22.1] - 2026-09-25
 
 ### Security

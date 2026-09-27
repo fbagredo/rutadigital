@@ -101,7 +101,7 @@ class ImportFormsFromDirectoryTest {
         // every import added another copy of it.
         assertThat(saved()).extracting(Form::id).containsExactly("checkin.walk", "checkin.walk");
         // And it can be pruned now, which is the other half of what an unstable id cost.
-        assertThat(registry.idsFor("form", dir.toRealPath().toString())).containsExactly("checkin.walk");
+        assertThat(registry.idsFor("form", dir.toAbsolutePath().normalize().toString())).containsExactly("checkin.walk");
     }
 
     @Test

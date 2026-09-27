@@ -9,6 +9,7 @@ import io.mateu.workflow.application.out.TaskContractRepository;
 import io.mateu.workflow.application.out.WorkflowDefinitionRepository;
 import io.mateu.workflow.domain.aggregates.Step;
 import io.mateu.workflow.domain.aggregates.StepType;
+import io.mateu.workflow.infra.in.ui.pages.OneLine;
 import io.mateu.workflow.tasks.TaskContract;
 import java.util.List;
 import java.util.Optional;
@@ -83,10 +84,11 @@ public class TaskContractsCrudAdapter {
                 usedBy++;
             }
         }
-        return new TaskContractRow(ref, contract.group(), contract.topic(), contract.description(),
+        return new TaskContractRow(ref, contract.group(), contract.topic(), OneLine.of(contract.description()),
                 usedBy,
                 "/eventconductor/tasks/" + contract.group() + "/module.zip",
-                "/eventconductor/tasks/" + contract.group() + "/service.zip");
+                "/eventconductor/tasks/" + contract.group() + "/service.zip",
+                contract.description());
     }
 
     private boolean referencesTask(io.mateu.workflow.domain.aggregates.WorkflowDefinition definition,
@@ -107,6 +109,6 @@ public class TaskContractsCrudAdapter {
         var needle = searchText.toLowerCase();
         return row.id().toLowerCase().contains(needle)
                 || row.group().toLowerCase().contains(needle)
-                || (row.description() != null && row.description().toLowerCase().contains(needle));
+                || (row.fullDescription() != null && row.fullDescription().toLowerCase().contains(needle));
     }
 }

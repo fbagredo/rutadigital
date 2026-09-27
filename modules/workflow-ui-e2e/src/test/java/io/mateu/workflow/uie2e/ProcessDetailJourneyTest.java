@@ -91,8 +91,9 @@ class ProcessDetailJourneyTest extends AbstractUiE2eTest {
 
         // Asserted on the id rather than on the workflow name: the detail view leaves its own
         // grid (the Steps tab) in the DOM, so "the first vaadin-grid" is not reliably the list's
-        // once you have been somewhere else. The id appears in one place only.
+        // once you have been somewhere else. The id appears in one place only (as its abbreviated
+        // cell, which carries the whole id in data-uuid).
         assertThat(processes.itemCount()).containsText("1 item");
-        assertThat(page.getByText(id).first()).isVisible();
+        assertThat(processes.idCell(id)).isVisible();
     }
 }

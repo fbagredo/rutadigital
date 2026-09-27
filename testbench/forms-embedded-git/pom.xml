@@ -14,7 +14,7 @@
     <name>forms-embedded-git</name>
     <description>EventConductor forms — embedded mode with JPA (H2) and form definitions imported from Git</description>
     <properties>
-        <mateu.version>3.0-alpha.362</mateu.version>
+        <mateu.version>3.0-alpha.368</mateu.version>
         <java.version>21</java.version>
     </properties>
     <dependencies>
