@@ -253,6 +253,20 @@ public final class DistInfra {
         }
     }
 
+    /** {@link #publishUpstream(DomainEvent)} with record headers, written as UTF-8 bytes. */
+    public static void publishUpstream(DomainEvent event, Map<String, String> headers) {
+        try {
+            var json = eventWriter.writerFor(DomainEvent.class).writeValueAsString(event);
+            var record = new ProducerRecord<String, String>("upstream", json);
+            headers.forEach((name, value) ->
+                    record.headers().add(name, value.getBytes(java.nio.charset.StandardCharsets.UTF_8)));
+            producer.send(record);
+            producer.flush();
+        } catch (Exception e) {
+            throw new IllegalStateException("Could not publish upstream event", e);
+        }
+    }
+
     /** Fire-and-forget variant for bulk publishing (call {@link #flushProducer()} afterwards). */
     public static void publishUpstreamAsync(DomainEvent event) {
         try {

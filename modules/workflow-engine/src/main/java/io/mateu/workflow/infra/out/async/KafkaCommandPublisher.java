@@ -26,6 +26,7 @@ import org.springframework.stereotype.Service;
 public class KafkaCommandPublisher implements CommandPublisher {
 
     private final StreamBridge streamBridge;
+    private final io.mateu.workflow.application.out.WorkflowTracing workflowTracing;
     private final ProcessIndexRepository processIndexRepository;
 
     @Override
@@ -34,6 +35,6 @@ public class KafkaCommandPublisher implements CommandPublisher {
         var shardId = processId == null ? null
                 : processIndexRepository.findByProcessId(processId).map(ProcessIndexRow::shardId).orElse(null);
         var binding = (shardId == null || shardId.isBlank()) ? "upstream" : "upstream-" + shardId;
-        PartitionedEvents.send(streamBridge, binding, command);
+        PartitionedEvents.send(streamBridge, binding, command, workflowTracing.currentTraceContext());
     }
 }

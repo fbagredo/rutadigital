@@ -218,6 +218,43 @@ ordinary context propagation: a rebalance, a restart, a redelivery from the dead
 `TIMER` step that waits a week. A `traceparent` in a message header is gone the moment the message
 is replayed; a derived anchor was never held.
 
+### Joining the caller's trace
+
+A process started from inside somebody else's trace — a booking a CRS sent, whose trace already
+holds the CRS, the connector and the broker hop — can join that trace instead of starting its own,
+so the booking reads end to end in one waterfall: caller → engine → every worker → back.
+
+The caller hands over its W3C context in either of two ways:
+
+- **Kafka record headers** on the `ProcessCreationRequested` record: `traceparent`, and optionally
+  `tracestate` and `baggage`, named as the W3C specs name them, values as UTF-8 bytes.
+- **The payload**: `ProcessCreationRequested.traceContext` — `{"traceparent": …, "tracestate": …,
+  "baggage": …}` — for a producer whose outbox relay cannot set headers. Optional and left off the
+  wire when null; an engine that predates it ignores it. The payload wins when both are present.
+
+The engine keeps the context with the process (table `process_trace_context`, one row per process
+that was given one) and uses the caller's span **as the process's anchor** in place of the derived
+one. Everything described below still holds — the live spans, the recorded process and step spans,
+one trace for the whole life of the process on every pod — it simply sits under the caller's span,
+and it is stored rather than derived, so it survives restarts and redeliveries the same way. The
+caller's sampled flag decides whether the process is traced.
+
+**Every record the engine publishes for the process carries the trace on**: tasks
+(`TaskExecutionRequested`, straight from `dispatch-step`), everything relayed through the outbox,
+`PUBLISH_EVENT` events, child-process creations — each with a `traceparent` of the engine span that
+sent it, plus the caller's `tracestate` and `baggage` passed through. Headers are written as raw
+bytes so any W3C propagator on the other side reads them. A worker built on `worker-kafka` runs the
+handler in a `CONSUMER` span `eventconductor.task <stepId>` under that `traceparent` (when it has a
+tracing bridge), and exposes the context to the handler as `TaskContext.traceContext()`. A worker
+with its own Spring Cloud Stream consumer joins by turning on the binder's observation
+(`spring.cloud.stream.kafka.binder.enable-observation=true`) with a tracing bridge on the classpath.
+Replies need nothing: the engine continues the process's trace from what it stored.
+
+Only while tracing is on: with no `Tracer`, nothing is stored, nothing is looked up, and no header is
+added. `workflow.tracing.join-caller-trace=false` keeps every process on its derived trace even when
+a context arrives. Synchronous invocations keep their own design — the request and the process in
+separate traces, linked both ways (see [Synchronous invocation](#synchronous-invocation)).
+
 ### Sampling
 
 `management.tracing.sampling.probability` governs process traces exactly as it governs everything
@@ -250,8 +287,9 @@ store **while it is still running**, before its own span exists:
 
 | Span | What it covers |
 |---|---|
-| `eventconductor.step-over` | Advancing a process: deciding what may run now and dispatching it |
-| `eventconductor.dispatch-step` | Handing one step to a worker |
+| `eventconductor.create-process` | Creating a process that joined a caller's trace |
+| `eventconductor.step-over` | Advancing a process: deciding what may run now and dispatching it; tagged with the workflow id, business key, the process's status after it and the steps it moved (`eventconductor.steps.moved`) |
+| `eventconductor.dispatch-step` | Handing one step to a worker; tagged with the step and workflow ids |
 | `eventconductor.correlate-message` | Matching an arriving message to the steps waiting for it |
 | `outbox relay` | Publishing one outbox row, as a continuation of the trace that produced it |
 

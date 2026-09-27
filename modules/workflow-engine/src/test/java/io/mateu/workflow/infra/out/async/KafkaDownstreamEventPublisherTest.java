@@ -31,6 +31,7 @@ import static org.mockito.Mockito.when;
 class KafkaDownstreamEventPublisherTest {
 
     @Mock StreamBridge streamBridge;
+    @Mock io.mateu.workflow.application.out.WorkflowTracing workflowTracing;
 
     @InjectMocks KafkaDownstreamEventPublisher publisher;
 

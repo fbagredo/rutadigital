@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **A process can join its caller's trace.** A `ProcessCreationRequested` carrying a W3C context — `traceparent` (and optionally `tracestate`, `baggage`) as Kafka record headers, or in the new optional `traceContext` field — starts a process whose trace is the caller's: the engine keeps the context (`process_trace_context`, migration V35) and anchors the process to the caller's span instead of the id-derived anchor, so its step-overs, dispatches, recorded process and step spans all sit under the caller. Every record the engine publishes for the process — tasks, outbox-relayed events, `PUBLISH_EVENT`s, child creations — carries `traceparent`/`tracestate`/`baggage` headers (raw bytes) continuing that trace. `worker-kafka` runs each handler in a `CONSUMER` span under the task's headers and exposes them as `TaskContext.traceContext()`; `TaskDispatcher.dispatch(task, traceContext)` and the `TaskTracing` hook do the same for other transports. New span `eventconductor.create-process`; `step-over` is tagged with the workflow id, business key, resulting process status and the steps it moved, `dispatch-step` with the step and workflow ids. Only while tracing is on (no `Tracer`: nothing stored, looked up or added); `workflow.tracing.join-caller-trace=false` opts out. No change to any message for a producer that sends no context; synchronous invocations keep their linked-traces design. See *Observability → Joining the caller's trace*.
+
 ### Changed
 - Mateu 3.0-alpha.362 → 3.0-alpha.368 (the engine UI and every app). Brings listing row details (`@Details`), UUID cells shortened to their last block, and Vaadin/Redwood layout fixes.
 - The workflow definitions listing and the task contracts listing show a long description on one line, cut at a word with "…"; the whole description opens under the row when it is clicked.

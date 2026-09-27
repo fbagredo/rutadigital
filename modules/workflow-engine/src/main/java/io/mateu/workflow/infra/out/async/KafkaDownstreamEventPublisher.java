@@ -24,9 +24,11 @@ import org.springframework.stereotype.Service;
 public class KafkaDownstreamEventPublisher implements DownstreamEventPublisher {
 
     private final StreamBridge streamBridge;
+    private final io.mateu.workflow.application.out.WorkflowTracing workflowTracing;
 
     @Override
     public void publish(DomainEvent event, String topic) {
-        PartitionedEvents.send(streamBridge, DownstreamEventPublisher.destinationFor(topic), event);
+        PartitionedEvents.send(streamBridge, DownstreamEventPublisher.destinationFor(topic), event,
+                workflowTracing.currentTraceContext());
     }
 }

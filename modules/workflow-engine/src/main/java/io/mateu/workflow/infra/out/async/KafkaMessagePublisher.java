@@ -18,9 +18,10 @@ import org.springframework.stereotype.Service;
 public class KafkaMessagePublisher implements MessagePublisher {
 
     private final StreamBridge streamBridge;
+    private final io.mateu.workflow.application.out.WorkflowTracing workflowTracing;
 
     @Override
     public void publish(MessageReceived message) {
-        PartitionedEvents.send(streamBridge, "messages", message);
+        PartitionedEvents.send(streamBridge, "messages", message, workflowTracing.currentTraceContext());
     }
 }

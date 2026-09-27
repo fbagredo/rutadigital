@@ -90,10 +90,10 @@ public class StepExecutionDBRepository implements StepExecutionRepository {
 
         // Captured here, at the one moment the event and the context that produced it are both
         // in hand: the relay publishes this row later, from a thread that has neither.
-        var traceParent = workflowTracing.currentTraceParent();
+        var traceContext = workflowTracing.currentTraceContext();
         var outbox = stepExecution.popEvents().stream()
                 .map(event -> {
-                    var row = new OutboxMessageEntity(event, traceParent);
+                    var row = new OutboxMessageEntity(event, traceContext);
                     // Driving this process inline (the synchronous fast path): its own rows are
                     // written already claimed by this pod, so no relay races the driver for them.
                     var claim = io.mateu.workflow.infra.out.async.InlineDrive.claimFor(event);

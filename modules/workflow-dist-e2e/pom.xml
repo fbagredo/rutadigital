@@ -65,6 +65,18 @@
             <scope>test</scope>
         </dependency>
 
+        <!-- DIST-31: a real OpenTelemetry tracer behind the engine's Micrometer bridge, so trace
+             context propagation is checked over real Kafka records. -->
+        <dependency>
+            <groupId>io.micrometer</groupId>
+            <artifactId>micrometer-tracing-bridge-otel</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>io.opentelemetry</groupId>
+            <artifactId>opentelemetry-sdk-testing</artifactId>
+            <scope>test</scope>
+        </dependency>
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-test</artifactId>

@@ -81,7 +81,7 @@ public class StepOverProcessUseCase {
         // between. The anchor is derived from the process id, so every pod computes the same one.
         if (!processLockService.runExclusively(command.processId(),
                 () -> workflowTracing.continuing(
-                        processTrace.anchorFor(command.processId()),
+                        processTrace.contextFor(command.processId()),
                         "eventconductor.step-over",
                         java.util.Map.of("eventconductor.process.id", command.processId()),
                         () -> doHandle(command)))) {
@@ -98,6 +98,8 @@ public class StepOverProcessUseCase {
         // save below would then fail optimistic locking and roll the whole handler back.
         var stepExecutions = stepExecutionRepository.findByProcessId(command.processId());
         var process = processRepository.findById(command.processId()).orElseThrow();
+        workflowTracing.tagCurrentSpan("eventconductor.workflow.id", process.getWorkflowDefinitionId());
+        workflowTracing.tagCurrentSpan("eventconductor.process.businessKey", process.getBusinessKey());
 
         // Process-level lock: a definition can serialize its whole instances by a key. Gate the
         // process here — before any step is dispatched — so an instance that cannot take the lock
@@ -126,6 +128,7 @@ public class StepOverProcessUseCase {
         if (result.getUpdatedProcess() != process || replied) {
             processRepository.save(result.getUpdatedProcess());
         }
+        tagOutcome(result.getUpdatedProcess(), result.getStepsToSave());
 
         // Status as it was before the transition decided anything. The orchestration service is
         // pure and hands back copies (@With), so the list read above still holds the old values —
@@ -181,6 +184,32 @@ public class StepOverProcessUseCase {
             // The same moment, seen the other way: this is where the process's whole run is
             // finally known, so it is where it can be written out as a trace.
             recordProcessTraceService.processReachedTerminalStatus(result.getUpdatedProcess());
+        }
+    }
+
+    /**
+     * What this step-over decided, on its span: the process's status after it, and each step it
+     * moved as {@code stepId=STATUS}. Bounded, because a fan-out can move hundreds of steps and a
+     * span attribute is not the place to list them all.
+     */
+    private void tagOutcome(Process updated, List<StepExecution> stepsToSave) {
+        if (!workflowTracing.enabled()) {
+            return;
+        }
+        workflowTracing.tagCurrentSpan("eventconductor.process.status", String.valueOf(updated.getStatus()));
+        if (!stepsToSave.isEmpty()) {
+            var moved = new StringBuilder();
+            for (var stepExecution : stepsToSave) {
+                if (moved.length() > 480) {
+                    moved.append(",…");
+                    break;
+                }
+                if (!moved.isEmpty()) {
+                    moved.append(',');
+                }
+                moved.append(stepExecution.getStepId()).append('=').append(stepExecution.getStatus());
+            }
+            workflowTracing.tagCurrentSpan("eventconductor.steps.moved", moved.toString());
         }
     }
 

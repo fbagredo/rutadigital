@@ -31,6 +31,12 @@ final class ExternalEventSender {
     }
 
     static void send(StreamBridge streamBridge, EventDestinationsProperties destinations, ExternalEventRequested event) {
+        send(streamBridge, destinations, event, null);
+    }
+
+    /** With the W3C trace headers of {@code trace} on the record; null sends none. */
+    static void send(StreamBridge streamBridge, EventDestinationsProperties destinations, ExternalEventRequested event,
+                     io.mateu.workflow.dtos.TraceContext trace) {
         var destination = destinations.getDestinations().get(event.destination());
         if (destination == null || destination.getTopic() == null || destination.getTopic().isBlank()) {
             // Validated when the step ran, so only a configuration changed underneath can land here. It
@@ -39,7 +45,7 @@ final class ExternalEventSender {
                     "PUBLISH_EVENT destination '" + event.destination() + "' has no topic configured"
                             + " (workflow.events.destinations." + event.destination() + ".topic)");
         }
-        var message = messageFor(event, formatOf(event, destination));
+        var message = PartitionedEvents.withTraceHeaders(messageFor(event, formatOf(event, destination)), trace);
         if (!streamBridge.send(destination.getTopic(), message)) {
             throw new PartitionedEvents.EventPublicationRefusedException(destination.getTopic(), event);
         }

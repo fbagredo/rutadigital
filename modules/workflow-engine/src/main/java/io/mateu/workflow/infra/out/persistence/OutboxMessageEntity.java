@@ -65,6 +65,17 @@ public class OutboxMessageEntity {
     private String traceParent;
 
     /**
+     * The {@code tracestate} and {@code baggage} of the trace the row was produced in — present only
+     * for a process that joined a caller's trace carrying them. Passed through untouched onto the
+     * published record's headers, next to the relay's own {@code traceparent}.
+     */
+    @Column(name = "trace_state", length = 512)
+    private String traceState;
+
+    @Column(name = "baggage", length = 2048)
+    private String baggage;
+
+    /**
      * The event's partition key — the process id for every process event — so the synchronous fast
      * path can find the rows one process wrote without reading payloads. Null for unkeyed events.
      */
@@ -82,12 +93,12 @@ public class OutboxMessageEntity {
     /** The shape before rows could be claimed by an inline drive: hand-made rows keep compiling. */
     public OutboxMessageEntity(String id, LocalDateTime timestamp, String status, String messageType,
                                String payload, String traceParent) {
-        this(id, timestamp, status, messageType, payload, traceParent, null, null, null);
+        this(id, timestamp, status, messageType, payload, traceParent, null, null, null, null, null);
     }
 
     /** An event with no trace attached — what happens when tracing is off, which is the default. */
     public OutboxMessageEntity(DomainEvent event) {
-        this(event, null);
+        this(event, (String) null);
     }
 
     public OutboxMessageEntity(DomainEvent event, String traceParent) {
@@ -98,6 +109,20 @@ public class OutboxMessageEntity {
         this.payload = toJson(event);
         this.traceParent = traceParent;
         this.partitionKey = partitionKeyOf(event);
+    }
+
+    /** An event and the whole trace context it was produced in; null when nothing was traced. */
+    public OutboxMessageEntity(DomainEvent event, io.mateu.workflow.dtos.TraceContext traceContext) {
+        this(event, traceContext == null ? null : traceContext.traceparent());
+        if (traceContext != null) {
+            this.traceState = traceContext.tracestate();
+            this.baggage = traceContext.baggage();
+        }
+    }
+
+    /** The row's trace context, whole, or null when it was written outside any trace. */
+    public io.mateu.workflow.dtos.TraceContext traceContext() {
+        return io.mateu.workflow.dtos.TraceContext.of(traceParent, traceState, baggage);
     }
 
     /**

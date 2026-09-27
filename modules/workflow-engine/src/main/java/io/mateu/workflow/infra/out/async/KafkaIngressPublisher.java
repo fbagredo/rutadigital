@@ -17,10 +17,11 @@ import org.springframework.stereotype.Service;
 public class KafkaIngressPublisher implements IngressPublisher {
 
     private final StreamBridge streamBridge;
+    private final io.mateu.workflow.application.out.WorkflowTracing workflowTracing;
 
     @Override
     public void publishToShard(DomainEvent event, String shardId) {
         var binding = (shardId == null || shardId.isBlank()) ? "upstream" : "upstream-" + shardId;
-        PartitionedEvents.send(streamBridge, binding, event);
+        PartitionedEvents.send(streamBridge, binding, event, workflowTracing.currentTraceContext());
     }
 }

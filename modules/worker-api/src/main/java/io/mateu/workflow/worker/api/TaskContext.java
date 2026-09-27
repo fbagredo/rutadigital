@@ -28,4 +28,13 @@ public interface TaskContext {
      * it from a long task so a slow-but-healthy run is not mistaken for a lost one.
      */
     void progress(String message);
+
+    /**
+     * The W3C trace context the engine dispatched this task in, or null when it sent none. The
+     * handler already runs inside it when the worker has a tracing bridge; this is for handing it
+     * on by hand — to a call no instrumentation covers, or to a process this task starts.
+     */
+    default io.mateu.workflow.dtos.TraceContext traceContext() {
+        return null;
+    }
 }

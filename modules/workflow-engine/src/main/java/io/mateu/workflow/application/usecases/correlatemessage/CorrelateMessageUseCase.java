@@ -60,7 +60,7 @@ public class CorrelateMessageUseCase {
             return;
         }
         matched.forEach(se -> workflowTracing.continuing(
-                processTrace.anchorFor(se.getProcessId()),
+                processTrace.contextFor(se.getProcessId()),
                 "eventconductor.correlate-message",
                 java.util.Map.of("eventconductor.process.id", String.valueOf(se.getProcessId()),
                         "eventconductor.message.name", String.valueOf(command.messageName())),

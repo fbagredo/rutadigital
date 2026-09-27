@@ -31,6 +31,7 @@ public class ProcessDBRepository implements ProcessRepository {
     final OutboxMessageEntityRepository outboxMessageEntityRepository;
     final io.mateu.workflow.application.out.WorkflowTracing workflowTracing;
     final io.mateu.workflow.infra.out.async.OutboxSignal outboxSignal;
+    final io.mateu.workflow.application.out.ProcessTraceContextRepository processTraceContexts;
     final io.mateu.workflow.application.services.ProcessStatusAnnouncer processStatusAnnouncer;
     // Present only when the read model is switched on (workflow.analytics.rollup=true); empty
     // otherwise, and then aggregateProcesses falls through to the GROUP BY below unchanged.
@@ -135,10 +136,10 @@ public class ProcessDBRepository implements ProcessRepository {
         ));
         // Captured here, at the one moment the event and the context that produced it are both
         // in hand: the relay publishes this row later, from a thread that has neither.
-        var traceParent = workflowTracing.currentTraceParent();
+        var traceContext = workflowTracing.currentTraceContext();
         var outbox = process.popEvents().stream()
                 .map(event -> {
-                    var row = new OutboxMessageEntity(event, traceParent);
+                    var row = new OutboxMessageEntity(event, traceContext);
                     // Driving this process inline (the synchronous fast path): its own rows are
                     // written already claimed by this pod, so no relay races the driver for them.
                     var claim = io.mateu.workflow.infra.out.async.InlineDrive.claimFor(event);
@@ -179,6 +180,7 @@ public class ProcessDBRepository implements ProcessRepository {
     @Override
     public void deleteAllById(List<String> selectedIds) {
         processEntityRepository.deleteAllById(selectedIds);
+        processTraceContexts.deleteAllByProcessId(selectedIds);
     }
 
     @Override
