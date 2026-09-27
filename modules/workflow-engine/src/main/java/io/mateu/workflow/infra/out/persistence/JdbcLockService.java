@@ -29,8 +29,9 @@ import java.util.UUID;
  * earliest waiter (if any) is promoted to holder in the same transaction, so no window exists where
  * the lock is free but a waiter is still queued behind it.
  *
- * <p>The composite key is materialised into a single {@code id} column
- * ({@code lockName + '\0' + lockKey}) so the mutex is a plain primary key and {@code FOR UPDATE} is
+ * <p>The composite key is materialised into a single {@code id} column ({@link LockRowId}:
+ * {@code <name length>:<lockName>:<lockKey>}, printable so PostgreSQL accepts it) so the mutex is a
+ * plain primary key and {@code FOR UPDATE} is
  * a by-id lookup. The first acquirer of a fresh key races on that INSERT; the loser catches the
  * duplicate-key and retries the {@code FOR UPDATE} path once, by which point the winner's row is
  * visible and it enqueues.
@@ -45,8 +46,6 @@ import java.util.UUID;
 @Slf4j
 public class JdbcLockService implements LockService {
 
-    private static final char SEP = '\u0000';
-
     final JdbcTemplate jdbcTemplate;
     final TransactionTemplate transactionTemplate;
 
@@ -59,7 +58,54 @@ public class JdbcLockService implements LockService {
     long leaseMs;
 
     private static String rowId(String lockName, String lockKey) {
-        return lockName + SEP + lockKey;
+        return LockRowId.of(lockName, lockKey);
+    }
+
+    /** Set once the legacy-id rewrite has run successfully; see {@link #migrateLegacyRowIds()}. */
+    private volatile boolean legacyIdsChecked;
+
+    /**
+     * Rewrites the ids of rows written by the old NUL-joined encoding, so a lock held across the
+     * upgrade is still found (and still excludes) under the new one. Only H2 can hold such rows —
+     * PostgreSQL rejected every one of those inserts — and a held lock is short-lived, so this is
+     * normally a no-op scan of a near-empty table.
+     *
+     * <p>Runs lazily, before the first lock operation of this instance, not at startup: a boot must
+     * never wait on the database (DIST-08 boots a pod with PostgreSQL paused). Until it succeeds it is
+     * retried on the next operation; a failure is logged, never thrown.
+     */
+    public void migrateLegacyRowIds() {
+        if (legacyIdsChecked) {
+            return;
+        }
+        synchronized (this) {
+            if (legacyIdsChecked) {
+                return;
+            }
+            try {
+                rewriteLegacyRowIds();
+                legacyIdsChecked = true;
+            } catch (RuntimeException e) {
+                log.warn("Could not check process_lock for legacy ids: {}", e.getMessage());
+            }
+        }
+    }
+
+    /** The rewrite itself, unguarded; returns how many rows it rewrote. */
+    public int rewriteLegacyRowIds() {
+        var rows = jdbcTemplate.query("SELECT id, lock_name, lock_key FROM process_lock",
+                (rs, i) -> new String[]{rs.getString(1), rs.getString(2), rs.getString(3)});
+        int rewritten = 0;
+        for (String[] row : rows) {
+            if (LockRowId.isLegacy(row[0])) {
+                rewritten += jdbcTemplate.update("UPDATE process_lock SET id = ? WHERE id = ?",
+                        rowId(row[1], row[2]), row[0]);
+            }
+        }
+        if (rewritten > 0) {
+            log.info("Rewrote {} process_lock id(s) from the NUL-separated encoding", rewritten);
+        }
+        return rewritten;
     }
 
     private Timestamp newLease() {
@@ -68,12 +114,14 @@ public class JdbcLockService implements LockService {
 
     @Override
     public Outcome acquire(String lockName, String lockKey, String processId, String stepExecutionId) {
+        migrateLegacyRowIds();
         return transactionTemplate.execute(status ->
                 acquireInTx(lockName, lockKey, processId, stepExecutionId, false, true));
     }
 
     @Override
     public Outcome tryAcquire(String lockName, String lockKey, String processId) {
+        migrateLegacyRowIds();
         return transactionTemplate.execute(status ->
                 acquireInTx(lockName, lockKey, processId, null, false, false));
     }
@@ -112,11 +160,13 @@ public class JdbcLockService implements LockService {
 
     @Override
     public Optional<Grant> release(String lockName, String lockKey, String processId) {
+        migrateLegacyRowIds();
         return transactionTemplate.execute(status -> releaseInTx(lockName, lockKey, processId));
     }
 
     @Override
     public List<Grant> releaseAll(String processId) {
+        migrateLegacyRowIds();
         return transactionTemplate.execute(status -> {
             List<String[]> held = jdbcTemplate.query(
                     "SELECT lock_name, lock_key FROM process_lock WHERE holder_process_id = ?",
@@ -142,6 +192,7 @@ public class JdbcLockService implements LockService {
 
     @Override
     public List<Grant> expireLeases(LocalDateTime now) {
+        migrateLegacyRowIds();
         return transactionTemplate.execute(status -> {
             var expired = jdbcTemplate.query(
                     "SELECT lock_name, lock_key FROM process_lock "

@@ -1,0 +1,11 @@
+{
+  "id": "dist-process-lock",
+  "name": "Distributed: whole process serialized by a business key",
+  "version": 1,
+  "processLock": { "name": "reservation", "key": "bookingId" },
+  "steps": [
+    { "id": "start", "type": "START", "name": "Start" },
+    { "id": "pwork", "type": "ACTION", "name": "Touch the reservation", "topic": "work", "preconditionStepId": "start" },
+    { "id": "end", "type": "END", "name": "End", "preconditionStepId": "pwork" }
+  ]
+}
