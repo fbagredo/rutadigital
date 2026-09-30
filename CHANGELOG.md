@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.23.2] - 2026-09-30
+
+### Fixed
+- **LOCK: two processes taking a free key at the same instant no longer break on PostgreSQL.** The first acquirers of a key race on the `process_lock` INSERT; the loser caught the duplicate key and retried *in the same transaction*, which PostgreSQL had already aborted (`25P02 current transaction is aborted`). The step's event was parked on the dead-letter topic and the process stayed PENDING for good. The retry now runs in a new transaction, where the winner's row is visible and the loser queues behind it. Found in ec-demo1: a check-in and the charge of its extra, started by one desk action. Covered on PostgreSQL (DIST-30).
+
 ## [2.23.1] - 2026-09-28
 
 ### Fixed
