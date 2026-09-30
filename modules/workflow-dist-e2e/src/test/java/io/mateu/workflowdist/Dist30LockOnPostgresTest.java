@@ -127,4 +127,46 @@ class Dist30LockOnPostgresTest extends AbstractDistTest {
         awaitProcessCompleted("dist30-pb");
         assertThat(lockRowIds("reservation", "MRU01/XYZ789")).isEmpty();
     }
+
+    /**
+     * Two processes taking a free key at the same instant (ec-demo1: a check-in and the charge of its
+     * extra, started by the same desk action) race on the lock row's INSERT. The loser used to retry
+     * in the transaction its failed INSERT had already aborted on PostgreSQL (25P02), and the step's
+     * event was parked on the dead-letter topic, the process PENDING for good. Here the winner's
+     * INSERT is held uncommitted while the loser acquires: the loser's INSERT waits on it, fails when
+     * it commits, and the loser must end up queued behind the winner.
+     */
+    @Test
+    void theLoserOfTheFirstInsertOfAFreeKeyIsQueuedNotBroken() throws Exception {
+        var locks = pod.getBean(io.mateu.workflow.infra.out.persistence.JdbcLockService.class);
+        var dataSource = ((org.springframework.jdbc.datasource.DriverManagerDataSource) DistInfra.jdbc().getDataSource());
+        try (var winner = dataSource.getConnection()) {
+            winner.setAutoCommit(false);
+            try (var insert = winner.prepareStatement("INSERT INTO process_lock (id, lock_name, lock_key, holder_process_id, "
+                    + "holder_step_execution_id, acquired_at, lease_deadline_at) VALUES (?, ?, ?, ?, ?, now(), now() + interval '15 minutes')")) {
+                insert.setString(1, io.mateu.workflow.infra.out.persistence.LockRowId.of("reservation", "MRU01/RACE01"));
+                insert.setString(2, "reservation");
+                insert.setString(3, "MRU01/RACE01");
+                insert.setString(4, "winner");
+                insert.setString(5, "winner-step");
+                insert.executeUpdate();
+            }
+            var loser = java.util.concurrent.CompletableFuture.supplyAsync(() ->
+                    locks.acquire("reservation", "MRU01/RACE01", "loser", "loser-step"));
+            Thread.sleep(1_000);
+            assertThat(loser).as("the loser waits on the winner's uncommitted row").isNotDone();
+            winner.commit();
+
+            assertThat(loser.get(15, java.util.concurrent.TimeUnit.SECONDS))
+                    .isEqualTo(io.mateu.workflow.application.out.LockService.Outcome.ENQUEUED);
+        }
+        assertThat(DistInfra.jdbc().queryForObject(
+                "SELECT holder_process_id FROM process_lock WHERE lock_name = ? AND lock_key = ?", String.class,
+                "reservation", "MRU01/RACE01")).isEqualTo("winner");
+        assertThat(DistInfra.jdbc().queryForList(
+                "SELECT process_id FROM process_lock_waiter WHERE lock_name = ? AND lock_key = ?", String.class,
+                "reservation", "MRU01/RACE01")).containsExactly("loser");
+        DistInfra.jdbc().update("DELETE FROM process_lock_waiter WHERE lock_key = 'MRU01/RACE01'");
+        DistInfra.jdbc().update("DELETE FROM process_lock WHERE lock_key = 'MRU01/RACE01'");
+    }
 }

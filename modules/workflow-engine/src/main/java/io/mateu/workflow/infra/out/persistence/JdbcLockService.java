@@ -33,8 +33,8 @@ import java.util.UUID;
  * {@code <name length>:<lockName>:<lockKey>}, printable so PostgreSQL accepts it) so the mutex is a
  * plain primary key and {@code FOR UPDATE} is
  * a by-id lookup. The first acquirer of a fresh key races on that INSERT; the loser catches the
- * duplicate-key and retries the {@code FOR UPDATE} path once, by which point the winner's row is
- * visible and it enqueues.
+ * duplicate-key and retries the {@code FOR UPDATE} path once, in a new transaction (PostgreSQL aborts
+ * the one the failed INSERT ran in), by which point the winner's row is visible and it enqueues.
  *
  * <p>Portable across the supported databases: no {@code ON CONFLICT} and no {@code SKIP LOCKED}.
  * {@code LIMIT 1} on the waiter query holds on H2, PostgreSQL and MariaDB; Oracle would route it
@@ -115,38 +115,48 @@ public class JdbcLockService implements LockService {
     @Override
     public Outcome acquire(String lockName, String lockKey, String processId, String stepExecutionId) {
         migrateLegacyRowIds();
-        return transactionTemplate.execute(status ->
-                acquireInTx(lockName, lockKey, processId, stepExecutionId, false, true));
+        return acquireRetryingTheFirstInsert(lockName, lockKey, processId, stepExecutionId, true);
     }
 
     @Override
     public Outcome tryAcquire(String lockName, String lockKey, String processId) {
         migrateLegacyRowIds();
-        return transactionTemplate.execute(status ->
-                acquireInTx(lockName, lockKey, processId, null, false, false));
+        return acquireRetryingTheFirstInsert(lockName, lockKey, processId, null, false);
+    }
+
+    /**
+     * The first acquirers of a fresh key race on its INSERT: the loser's FOR UPDATE locked nothing (the
+     * row did not exist yet) and its INSERT hits the winner's key. It retries once — in a NEW
+     * transaction: on PostgreSQL a failed statement aborts the transaction it ran in («current
+     * transaction is aborted, commands ignored until end of transaction block», 25P02), so retrying in
+     * the same one fails whatever it does. In the new one the winner's row is visible, FOR UPDATE
+     * blocks on it and reads the holder, and the loser enqueues.
+     */
+    private Outcome acquireRetryingTheFirstInsert(String lockName, String lockKey, String processId,
+                                                  String stepExecutionId, boolean enqueue) {
+        try {
+            return transactionTemplate.execute(status ->
+                    acquireInTx(lockName, lockKey, processId, stepExecutionId, enqueue));
+        } catch (DuplicateKeyException raced) {
+            log.debug("Lost the first acquire of {}/{} to another process; retrying", lockName, lockKey);
+            return transactionTemplate.execute(status ->
+                    acquireInTx(lockName, lockKey, processId, stepExecutionId, enqueue));
+        }
     }
 
     private Outcome acquireInTx(String lockName, String lockKey, String processId,
-                                String stepExecutionId, boolean retried, boolean enqueue) {
+                                String stepExecutionId, boolean enqueue) {
         String id = rowId(lockName, lockKey);
         String holder = lockRowForUpdate(id);
         if (holder == null) {
-            try {
-                jdbcTemplate.update(
-                        "INSERT INTO process_lock (id, lock_name, lock_key, holder_process_id, "
-                                + "holder_step_execution_id, acquired_at, lease_deadline_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
-                        id, lockName, lockKey, processId, stepExecutionId,
-                        Timestamp.valueOf(LocalDateTime.now()), newLease());
-                return Outcome.ACQUIRED;
-            } catch (DuplicateKeyException raced) {
-                // Another pod inserted the fresh row between our FOR UPDATE (which locked nothing,
-                // the row not existing yet) and this INSERT. Retry once: the row is now visible and
-                // FOR UPDATE will block on, then read, the winner.
-                if (retried) {
-                    throw raced;
-                }
-                return acquireInTx(lockName, lockKey, processId, stepExecutionId, true, enqueue);
-            }
+            // A DuplicateKeyException here — another acquirer inserted the fresh row first — ends this
+            // transaction; the caller retries in a new one.
+            jdbcTemplate.update(
+                    "INSERT INTO process_lock (id, lock_name, lock_key, holder_process_id, "
+                            + "holder_step_execution_id, acquired_at, lease_deadline_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    id, lockName, lockKey, processId, stepExecutionId,
+                    Timestamp.valueOf(LocalDateTime.now()), newLease());
+            return Outcome.ACQUIRED;
         }
         if (processId.equals(holder)) {
             return Outcome.ACQUIRED; // reentrant
