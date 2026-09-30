@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.23.3] - 2026-09-30
+
+### Security
+- **jackson-databind CVE-2026-68497** (high, CPU denial of service via unbounded numeric parsing): the apps pin jackson 3.1.6 (Boot 4.1.1's BOM brings 3.1.5), and the projector jackson 2.22.2 (2.21.5 otherwise). 2.23.2's release stopped at this Trivy gate: its Maven artifacts are on Central, its images were never pushed — 2.23.3 carries the same LOCK fix with its images.
+
 ## [2.23.2] - 2026-09-30
 
 ### Fixed
