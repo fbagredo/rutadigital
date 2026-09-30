@@ -27,6 +27,9 @@
         <url/>
     </scm>
     <properties>
+        <!-- CVE-2026-68497 (high, CPU DoS via unbounded numeric parsing): jackson-databind 3.1.5 comes from
+             Boot 4.1.1's BOM; 3.1.6 fixes it. Drop when Boot's BOM catches up. -->
+        <jackson-bom.version>3.1.6</jackson-bom.version>
         <java.version>21</java.version>
         <maven.deploy.skip>true</maven.deploy.skip>
         <mateu.version>3.0-alpha.368</mateu.version>
