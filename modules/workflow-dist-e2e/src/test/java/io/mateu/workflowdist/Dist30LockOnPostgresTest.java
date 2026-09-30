@@ -132,7 +132,8 @@ class Dist30LockOnPostgresTest extends AbstractDistTest {
      * Two processes taking a free key at the same instant (ec-demo1: a check-in and the charge of its
      * extra, started by the same desk action) race on the lock row's INSERT. The loser used to retry
      * in the transaction its failed INSERT had already aborted on PostgreSQL (25P02), and the step's
-     * event was parked on the dead-letter topic, the process PENDING for good. Here the winner's
+     * event was parked on the dead-letter topic, the process PENDING for good (2.23.3 retried in a
+     * "new" transaction, which joined the caller's: still aborted). Here the winner's
      * INSERT is held uncommitted while the loser acquires: the loser's INSERT waits on it, fails when
      * it commits, and the loser must end up queued behind the winner.
      */
@@ -151,8 +152,17 @@ class Dist30LockOnPostgresTest extends AbstractDistTest {
                 insert.setString(5, "winner-step");
                 insert.executeUpdate();
             }
-            var loser = java.util.concurrent.CompletableFuture.supplyAsync(() ->
-                    locks.acquire("reservation", "MRU01/RACE01", "loser", "loser-step"));
+            // As the engine acquires it: inside the transaction of the step over the process (the
+            // partition-owned process lock's), so a failed INSERT would abort that one.
+            var outer = new org.springframework.transaction.support.TransactionTemplate(
+                    pod.getBean(org.springframework.transaction.PlatformTransactionManager.class));
+            var loser = java.util.concurrent.CompletableFuture.supplyAsync(() -> outer.execute(status -> {
+                var outcome = locks.acquire("reservation", "MRU01/RACE01", "loser", "loser-step");
+                // The transaction is still usable afterwards: the step goes on writing in it.
+                assertThat(pod.getBean(org.springframework.jdbc.core.JdbcTemplate.class)
+                        .queryForObject("SELECT count(*) FROM process_lock_waiter", Integer.class)).isNotNull();
+                return outcome;
+            }));
             Thread.sleep(1_000);
             assertThat(loser).as("the loser waits on the winner's uncommitted row").isNotDone();
             winner.commit();

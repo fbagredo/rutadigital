@@ -32,9 +32,10 @@ import java.util.UUID;
  * <p>The composite key is materialised into a single {@code id} column ({@link LockRowId}:
  * {@code <name length>:<lockName>:<lockKey>}, printable so PostgreSQL accepts it) so the mutex is a
  * plain primary key and {@code FOR UPDATE} is
- * a by-id lookup. The first acquirer of a fresh key races on that INSERT; the loser catches the
- * duplicate-key and retries the {@code FOR UPDATE} path once, in a new transaction (PostgreSQL aborts
- * the one the failed INSERT ran in), by which point the winner's row is visible and it enqueues.
+ * a by-id lookup. The first acquirer of a fresh key races on that INSERT, which runs under a savepoint;
+ * the loser rolls back to it on the duplicate key (PostgreSQL would abort the whole transaction
+ * otherwise) and retries the {@code FOR UPDATE} path once, by which point the winner's row is visible
+ * and it enqueues.
  *
  * <p>Portable across the supported databases: no {@code ON CONFLICT} and no {@code SKIP LOCKED}.
  * {@code LIMIT 1} on the waiter query holds on H2, PostgreSQL and MariaDB; Oracle would route it
@@ -126,37 +127,37 @@ public class JdbcLockService implements LockService {
 
     /**
      * The first acquirers of a fresh key race on its INSERT: the loser's FOR UPDATE locked nothing (the
-     * row did not exist yet) and its INSERT hits the winner's key. It retries once — in a NEW
-     * transaction: on PostgreSQL a failed statement aborts the transaction it ran in («current
-     * transaction is aborted, commands ignored until end of transaction block», 25P02), so retrying in
-     * the same one fails whatever it does. In the new one the winner's row is visible, FOR UPDATE
-     * blocks on it and reads the holder, and the loser enqueues.
+     * row did not exist yet) and its INSERT hits the winner's key. It retries once, on the FOR UPDATE
+     * path — by then the winner's row is visible, FOR UPDATE blocks on it and reads the holder, and the
+     * loser enqueues. The retry runs in the same transaction, which is usually the caller's (the step
+     * over a process runs in one): the INSERT therefore runs under a savepoint, rolled back to on the
+     * duplicate key, because on PostgreSQL a failed statement aborts the whole transaction («current
+     * transaction is aborted, commands ignored until end of transaction block», 25P02).
      */
     private Outcome acquireRetryingTheFirstInsert(String lockName, String lockKey, String processId,
                                                   String stepExecutionId, boolean enqueue) {
-        try {
-            return transactionTemplate.execute(status ->
-                    acquireInTx(lockName, lockKey, processId, stepExecutionId, enqueue));
-        } catch (DuplicateKeyException raced) {
+        return transactionTemplate.execute(status -> {
+            var outcome = acquireInTx(lockName, lockKey, processId, stepExecutionId, enqueue);
+            if (outcome != null) {
+                return outcome;
+            }
             log.debug("Lost the first acquire of {}/{} to another process; retrying", lockName, lockKey);
-            return transactionTemplate.execute(status ->
-                    acquireInTx(lockName, lockKey, processId, stepExecutionId, enqueue));
-        }
+            outcome = acquireInTx(lockName, lockKey, processId, stepExecutionId, enqueue);
+            if (outcome == null) {
+                throw new DuplicateKeyException("Lock row " + rowId(lockName, lockKey) + " inserted by another "
+                        + "process twice while acquiring it");
+            }
+            return outcome;
+        });
     }
 
+    /** The outcome, or null when another acquirer inserted the fresh row first (retry). */
     private Outcome acquireInTx(String lockName, String lockKey, String processId,
                                 String stepExecutionId, boolean enqueue) {
         String id = rowId(lockName, lockKey);
         String holder = lockRowForUpdate(id);
         if (holder == null) {
-            // A DuplicateKeyException here — another acquirer inserted the fresh row first — ends this
-            // transaction; the caller retries in a new one.
-            jdbcTemplate.update(
-                    "INSERT INTO process_lock (id, lock_name, lock_key, holder_process_id, "
-                            + "holder_step_execution_id, acquired_at, lease_deadline_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
-                    id, lockName, lockKey, processId, stepExecutionId,
-                    Timestamp.valueOf(LocalDateTime.now()), newLease());
-            return Outcome.ACQUIRED;
+            return insertUnderSavepoint(id, lockName, lockKey, processId, stepExecutionId) ? Outcome.ACQUIRED : null;
         }
         if (processId.equals(holder)) {
             return Outcome.ACQUIRED; // reentrant
@@ -250,6 +251,41 @@ public class JdbcLockService implements LockService {
         }
         jdbcTemplate.update("DELETE FROM process_lock WHERE id = ?", id);
         return Optional.empty();
+    }
+
+    /**
+     * Inserts the lock row under a savepoint of the current transaction: true if inserted, false if
+     * another acquirer's row has the key (the savepoint rolled back to, the transaction still usable).
+     */
+    private boolean insertUnderSavepoint(String id, String lockName, String lockKey, String processId,
+                                         String stepExecutionId) {
+        Boolean inserted = jdbcTemplate.execute((ConnectionCallback<Boolean>) con -> {
+            var savepoint = con.setSavepoint();
+            try (var ps = con.prepareStatement("INSERT INTO process_lock (id, lock_name, lock_key, holder_process_id, "
+                    + "holder_step_execution_id, acquired_at, lease_deadline_at) VALUES (?, ?, ?, ?, ?, ?, ?)")) {
+                ps.setString(1, id);
+                ps.setString(2, lockName);
+                ps.setString(3, lockKey);
+                ps.setString(4, processId);
+                ps.setString(5, stepExecutionId);
+                ps.setTimestamp(6, Timestamp.valueOf(LocalDateTime.now()));
+                ps.setTimestamp(7, newLease());
+                ps.executeUpdate();
+            } catch (java.sql.SQLException e) {
+                if (e.getSQLState() != null && e.getSQLState().startsWith("23")) {
+                    con.rollback(savepoint);
+                    return false;
+                }
+                throw e;
+            }
+            try {
+                con.releaseSavepoint(savepoint);
+            } catch (java.sql.SQLException | UnsupportedOperationException ignored) {
+                // some drivers release savepoints only at commit
+            }
+            return true;
+        });
+        return Boolean.TRUE.equals(inserted);
     }
 
     /**

@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [2.23.4] - 2026-09-30
+
+### Fixed
+- **LOCK on a free key under contention, for real.** 2.23.2/2.23.3 retried the lost first INSERT in a "new" transaction — but the engine acquires a lock inside the transaction of the step over the process, so the inner template joined it and it was still aborted (25P02); the step was parked on the dead-letter topic as before. The INSERT now runs under a savepoint, rolled back to on the duplicate key, and the FOR UPDATE retry runs in the same, still usable, transaction. DIST-30 now acquires inside an outer transaction, as the engine does (it fails on 2.23.3's code with the production error).
+
 ## [2.23.3] - 2026-09-30
 
 ### Security
